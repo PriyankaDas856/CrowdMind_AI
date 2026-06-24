@@ -24,13 +24,23 @@ async def get_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
+    """Returns the founder profile FLAT (or null if none)."""
     doc = await db.founder_profiles.find_one(
         {"user_id": current_user.user_id}, {"_id": 0}
     )
-    insight = await db.founder_insights.find_one(
+    return doc  # null if not yet created
+
+
+@router.get("/insight")
+async def get_insight(
+    current_user: User = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Returns the latest founder insight FLAT (or null if none)."""
+    doc = await db.founder_insights.find_one(
         {"user_id": current_user.user_id}, {"_id": 0}, sort=[("generated_at", -1)]
     )
-    return {"profile": doc, "insight": insight}
+    return doc
 
 
 @router.post("/profile")

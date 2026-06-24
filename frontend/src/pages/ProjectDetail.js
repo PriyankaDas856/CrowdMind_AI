@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
     ArrowLeft,
     Brain,
+    Check,
     Copy,
     Download,
     FileText,
@@ -22,6 +23,7 @@ import {
     DollarSign,
     Rocket,
     MessageSquare,
+    X,
 } from "lucide-react";
 import {
     PieChart,
@@ -121,6 +123,46 @@ export default function ProjectDetail() {
     const feedback = data?.feedback || [];
     const insight = data?.insight;
     const isPublic = !!project?.is_public;
+
+    // ---- Async analysis job state ----
+    const [job, setJob] = useState(null); // {job_id, status, progress, current_module, completed_modules, failed_modules}
+    const pollRef = useRef(null);
+
+    const stopPolling = () => {
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+    };
+
+    useEffect(() => () => stopPolling(), []);
+
+    const pollJob = async (jobId) => {
+        try {
+            const { data: result } = await api.get(`/analyze/result/${jobId}`);
+            setJob(result);
+            if (
+                result.status === "done" ||
+                result.status === "partial" ||
+                result.status === "failed"
+            ) {
+                stopPolling();
+                if (result.status === "failed") {
+                    toast.error("AI analysis failed. Please retry.");
+                } else if (result.status === "partial") {
+                    toast.warning(
+                        `Analysis finished with ${result.failed_modules.length} module(s) skipped.`
+                    );
+                } else {
+                    toast.success("AI analysis complete");
+                }
+                await load();
+                setTimeout(() => setJob(null), 1500);
+            }
+        } catch {
+            // transient errors — keep polling
+        }
+    };
 
     const togglePublish = async () => {
         try {
@@ -1427,6 +1469,156 @@ export default function ProjectDetail() {
                     </TabsContent>
                 </Tabs>
             )}
+
+            {/* ---------------- Analysis Progress Modal ---------------- */}
+            {job && (
+                <AnalysisProgressModal job={job} onClose={() => { stopPolling(); setJob(null); }} />
+            )}
         </AppLayout>
+    );
+}
+
+
+const MODULES_ORDER = [
+    "Product-Market Fit",
+    "Customer Personas",
+    "Competitor Intelligence",
+    "Investor Readiness",
+    "SWOT Analysis",
+    "Business Model Canvas",
+    "Success Forecast",
+    "Market Validation Report",
+];
+
+function AnalysisProgressModal({ job, onClose }) {
+    const progress = Math.min(100, Math.max(0, job.progress || 0));
+    const completed = new Set(job.completed_modules || []);
+    const failed = new Map(
+        (job.failed_modules || []).map((f) => [f.module, f.error])
+    );
+    const done = job.status === "done" || job.status === "partial" || job.status === "failed";
+
+    // Naive ETA: assume 5s per remaining module
+    const remaining = MODULES_ORDER.filter(
+        (m) => !completed.has(m) && !failed.has(m)
+    ).length;
+    const etaSec = done ? 0 : Math.max(3, remaining * 5);
+
+    return (
+        <div
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 cm-fade-in"
+            data-testid="analysis-progress-modal"
+        >
+            <div
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                onClick={done ? onClose : undefined}
+            />
+            <div className="relative w-full max-w-xl cm-glass-strong rounded-3xl p-7 lg:p-8 border border-white/10 shadow-2xl cm-fade-up">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <div className="cm-label flex items-center gap-2">
+                            <span className="cm-ai-dots inline-flex">
+                                <span></span><span></span><span></span>
+                            </span>
+                            AI pipeline · 8 modules
+                        </div>
+                        <h3 className="mt-1 font-display font-black text-2xl tracking-tight">
+                            {done
+                                ? (job.status === "done"
+                                    ? "Analysis complete"
+                                    : job.status === "partial"
+                                    ? "Analysis finished (partial)"
+                                    : "Analysis failed")
+                                : "Generating your full report"}
+                        </h3>
+                        <p className="mt-1 text-sm text-zinc-400">
+                            {done
+                                ? "Refreshing your dashboard…"
+                                : `${job.current_module || "Working"} · est. ${etaSec}s remaining`}
+                        </p>
+                    </div>
+                    {done && (
+                        <button
+                            onClick={onClose}
+                            data-testid="modal-close-btn"
+                            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center"
+                            aria-label="Close"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    )}
+                </div>
+
+                {/* Animated progress bar */}
+                <div className="mt-6">
+                    <div className="flex items-center justify-between text-xs text-zinc-500 font-mono mb-2">
+                        <span>{job.status === "queued" ? "Queued" : "In progress"}</span>
+                        <span data-testid="modal-progress-value">{progress}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                        <div
+                            className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 transition-[width] duration-500 ease-out"
+                            style={{ width: `${progress}%` }}
+                        />
+                    </div>
+                </div>
+
+                {/* Modules grid */}
+                <div className="mt-6 grid sm:grid-cols-2 gap-2" data-testid="modal-modules-grid">
+                    {MODULES_ORDER.map((m, i) => {
+                        const isDone = completed.has(m);
+                        const isFailed = failed.has(m);
+                        const isCurrent = !isDone && !isFailed && job.current_module === m;
+                        return (
+                            <div
+                                key={m}
+                                data-testid={`modal-module-${i}`}
+                                className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-sm transition ${
+                                    isDone
+                                        ? "border-emerald-500/30 bg-emerald-500/8 text-emerald-100"
+                                        : isFailed
+                                        ? "border-rose-500/30 bg-rose-500/8 text-rose-100"
+                                        : isCurrent
+                                        ? "border-amber-500/40 bg-amber-500/10 text-amber-100 cm-breathe"
+                                        : "border-white/8 bg-white/2 text-zinc-400"
+                                }`}
+                            >
+                                <span
+                                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                                        isDone
+                                            ? "bg-emerald-500/25"
+                                            : isFailed
+                                            ? "bg-rose-500/25"
+                                            : isCurrent
+                                            ? "bg-amber-500/30"
+                                            : "bg-white/5"
+                                    }`}
+                                >
+                                    {isDone ? (
+                                        <Check className="w-3 h-3" />
+                                    ) : isFailed ? (
+                                        <X className="w-3 h-3" />
+                                    ) : isCurrent ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                        i + 1
+                                    )}
+                                </span>
+                                <span className="flex-1 truncate">{m}</span>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {failed.size > 0 && (
+                    <div className="mt-4 text-xs text-rose-300 cm-glass rounded-lg p-3 border border-rose-500/20">
+                        <span className="font-semibold">
+                            {failed.size} module(s) skipped:
+                        </span>{" "}
+                        {Array.from(failed.keys()).join(", ")}. Re-run analysis to retry.
+                    </div>
+                )}
+            </div>
+        </div>
     );
 }

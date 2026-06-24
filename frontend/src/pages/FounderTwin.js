@@ -23,13 +23,6 @@ import {
     SelectValue,
 } from "../components/ui/select";
 
-const BUDGETS = [
-    "Under $5k",
-    "$5k–$25k",
-    "$25k–$100k",
-    "$100k–$500k",
-    "$500k+",
-];
 const RISK = ["low", "medium", "high"];
 const TIME = ["weekends", "part-time", "full-time"];
 
@@ -91,7 +84,7 @@ export default function FounderTwin() {
     const [analyzing, setAnalyzing] = useState(false);
     const [insight, setInsight] = useState(null);
     const [form, setForm] = useState({
-        budget: "",
+        budget: 0,
         skills: [],
         experience_years: 0,
         industry_interests: [],
@@ -103,27 +96,29 @@ export default function FounderTwin() {
     useEffect(() => {
         (async () => {
             try {
-                const { data } = await api.get("/founder/profile");
-                if (data.profile) setForm({ ...form, ...data.profile });
-                if (data.insight) setInsight(data.insight);
+                const [{ data: profile }, { data: insightData }] = await Promise.all([
+                    api.get("/founder/profile"),
+                    api.get("/founder/insight"),
+                ]);
+                if (profile) setForm((f) => ({ ...f, ...profile }));
+                if (insightData) setInsight(insightData);
             } catch {
                 // ignore
             } finally {
                 setLoading(false);
             }
         })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const save = async (e) => {
         e?.preventDefault();
         if (!form.budget || form.skills.length === 0 || form.industry_interests.length === 0) {
-            toast.error("Pick budget, at least 1 skill and 1 industry");
+            toast.error("Pick a budget, at least 1 skill and 1 industry");
             return;
         }
         setSaving(true);
         try {
-            await api.post("/founder/profile", form);
+            await api.post("/founder/profile", { ...form, budget: Number(form.budget) });
             toast.success("Profile saved");
         } catch (err) {
             toast.error(err.response?.data?.detail || "Save failed");
@@ -178,26 +173,26 @@ export default function FounderTwin() {
                 >
                     <div>
                         <label className="cm-label mb-2 block flex items-center gap-2">
-                            <Wallet className="w-3.5 h-3.5 text-amber-400" /> Budget
+                            <Wallet className="w-3.5 h-3.5 text-amber-400" /> Budget (USD)
                         </label>
-                        <Select
-                            value={form.budget}
-                            onValueChange={(v) => setForm({ ...form, budget: v })}
-                        >
-                            <SelectTrigger
+                        <div className="relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 text-sm font-mono">$</span>
+                            <input
+                                type="number"
+                                min={0}
+                                step="100"
+                                value={form.budget || ""}
+                                onChange={(e) =>
+                                    setForm({ ...form, budget: Number(e.target.value) || 0 })
+                                }
+                                placeholder="e.g. 25000"
                                 data-testid="founder-budget"
-                                className="w-full px-4 py-3 h-auto rounded-xl bg-white/3 border border-white/8"
-                            >
-                                <SelectValue placeholder="How much can you put behind it?" />
-                            </SelectTrigger>
-                            <SelectContent className="cm-glass-strong border-white/10">
-                                {BUDGETS.map((b) => (
-                                    <SelectItem key={b} value={b}>
-                                        {b}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                                className="w-full pl-8 pr-4 py-3 rounded-xl bg-white/3 border border-white/8 focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20 focus:outline-none transition placeholder:text-zinc-600"
+                            />
+                        </div>
+                        <p className="mt-1.5 text-xs text-zinc-500">
+                            Roughly what you can put behind this. Decimal allowed.
+                        </p>
                     </div>
 
                     <div>

@@ -55,6 +55,35 @@ async def battle(
     else:
         result["winner_name"] = "Tie"
 
+    # Ensure criteria is a list of {name, a, b, note, winner}; if AI returned a
+    # dict (older shape), convert.
+    criteria = result.get("criteria")
+    if isinstance(criteria, dict):
+        ordered_names = {
+            "market_size": "Market Size",
+            "competition": "Competition",
+            "risk": "Risk",
+            "revenue_potential": "Revenue Potential",
+            "scalability": "Scalability",
+            "investor_appeal": "Investor Appeal",
+            "pmf": "PMF",
+        }
+        criteria = [
+            {"name": ordered_names.get(k, k.replace("_", " ").title()),
+             "a": v.get("a", 0), "b": v.get("b", 0), "note": v.get("note", "")}
+            for k, v in criteria.items()
+        ]
+    elif not isinstance(criteria, list):
+        criteria = []
+
+    # Annotate per-criterion winner
+    for c in criteria:
+        a = c.get("a", 0) or 0
+        b = c.get("b", 0) or 0
+        c["winner"] = "A" if a > b else ("B" if b > a else "TIE")
+        c["winner_name"] = pa["name"] if c["winner"] == "A" else (pb["name"] if c["winner"] == "B" else "Tie")
+
+    result["criteria"] = criteria
     result["project_a"] = {"id": pa["project_id"], "name": pa["name"]}
     result["project_b"] = {"id": pb["project_id"], "name": pb["name"]}
 

@@ -1,8 +1,10 @@
 """CrowdMind AI - FastAPI backend."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +24,17 @@ from starlette.responses import JSONResponse
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from ai_service import AI_MODEL_NAME, analyze_project  # noqa: E402
+from ai_service import (  # noqa: E402
+    AI_MODEL_NAME,
+    analyze_bmc,
+    analyze_competitor_intel,
+    analyze_investor,
+    analyze_overview,
+    analyze_personas,
+    analyze_pmf,
+    analyze_success,
+    analyze_swot,
+)
 from audit import log_action  # noqa: E402
 from auth import auth_router, get_current_user, get_db  # noqa: E402
 from extras import admin_router, battle_router, leaderboard_router  # noqa: E402
@@ -292,9 +304,255 @@ async def list_feedback(
 
 
 # ----------------------------------------------------------------
-# AI Analysis
+# AI Analysis (async modular job pattern — avoids proxy timeouts)
 # ----------------------------------------------------------------
-@api_router.post("/projects/{project_id}/analyze")
+ANALYSIS_MODULES = [
+    # (module_key_in_insight, display_label, runner_factory)
+    ("pmf",                "Product-Market Fit",       analyze_pmf),
+    ("personas",           "Customer Personas",        analyze_personas),
+    ("competitor_intel",   "Competitor Intelligence",  analyze_competitor_intel),
+    ("investor",           "Investor Readiness",       analyze_investor),
+    ("swot",               "SWOT Analysis",            analyze_swot),
+    ("bmc",                "Business Model Canvas",    analyze_bmc),
+    ("success_prediction", "Success Forecast",         analyze_success),
+    ("_overview",          "Market Validation Report", analyze_overview),
+]
+
+# Top-level fields written by the "_overview" module (everything else lives under module_key)
+OVERVIEW_TOP_FIELDS = {
+    "validation_score", "demand_prediction", "sentiment_breakdown",
+    "purchase_intent_breakdown", "trends", "pain_points", "competitors",
+    "business_models", "revenue_models", "customer_segments", "report",
+    "pitch_deck_slides",
+}
+
+
+async def _run_analysis_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    user_email: str,
+) -> None:
+    """Background worker: run all 8 modules in parallel with per-module progress.
+
+    - Each module is independent and fault-tolerant: a failure in one module is
+      logged but does not block others. The final job status becomes "partial".
+    - Results are persisted incrementally so the frontend can render anything
+      that has finished, even mid-flight.
+    - The insight document is keyed by (project_id, job_id) and finalized at the
+      end. The most recent finalized insight per project is what the UI reads.
+    """
+    try:
+        proj_doc = await db.projects.find_one(
+            {"project_id": project_id, "owner_id": user_id}, {"_id": 0}
+        )
+        if not proj_doc:
+            await db.analysis_jobs.update_one(
+                {"job_id": job_id},
+                {"$set": {"status": "failed",
+                          "error_message": "Project not found",
+                          "completed_at": utc_now_iso(),
+                          "updated_at": utc_now_iso()}},
+            )
+            return
+
+        feedback_docs = await db.feedback.find(
+            {"project_id": project_id}, {"_id": 0}
+        ).to_list(2000)
+
+        await db.analysis_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "processing",
+                      "progress": 5,
+                      "current_module": "Initializing AI pipeline",
+                      "updated_at": utc_now_iso()}},
+        )
+
+        # Seed a draft insight document we will incrementally fill in
+        insight_id = f"ins_{uuid.uuid4().hex[:12]}"
+        skeleton = {
+            "insight_id": insight_id,
+            "project_id": project_id,
+            "job_id": job_id,
+            "total_responses": len(feedback_docs),
+            "model": AI_MODEL_NAME,
+            "generated_at": utc_now_iso(),
+            "validation_score": 0,
+            "demand_prediction": "Low",
+            "investor_readiness_score": 0,
+            "sentiment_breakdown": {"positive": 0, "neutral": 0, "negative": 0},
+            "purchase_intent_breakdown": {},
+            "trends": [], "pain_points": [], "competitors": [],
+            "business_models": [], "revenue_models": [], "customer_segments": [],
+            "report": {},
+            "pmf": {}, "personas": [], "competitor_intel": {},
+            "investor": {}, "swot": {}, "bmc": {},
+            "success_prediction": {}, "pitch_deck_slides": [],
+        }
+        await db.ai_insights.update_one(
+            {"project_id": project_id, "job_id": job_id},
+            {"$setOnInsert": skeleton},
+            upsert=True,
+        )
+
+        total = len(ANALYSIS_MODULES)
+        completed_count = 0
+
+        async def _run_one(module_key: str, label: str, runner) -> tuple[str, str, str | None]:
+            nonlocal completed_count
+            # Announce start
+            await db.analysis_jobs.update_one(
+                {"job_id": job_id},
+                {"$set": {"current_module": label, "updated_at": utc_now_iso()}},
+            )
+            try:
+                result = await runner(proj_doc, feedback_docs)
+
+                # Persist results
+                if module_key == "_overview":
+                    # Merge top-level fields directly into the insight
+                    overview_set = {}
+                    for k in OVERVIEW_TOP_FIELDS:
+                        if k in result:
+                            overview_set[k] = result[k]
+                    overview_set["updated_at"] = utc_now_iso()
+                    if overview_set:
+                        await db.ai_insights.update_one(
+                            {"project_id": project_id, "job_id": job_id},
+                            {"$set": overview_set},
+                        )
+                    # Per-feedback sentiment labels
+                    for item in result.get("per_feedback_sentiment", []) or []:
+                        fid = item.get("feedback_id")
+                        sentiment = item.get("sentiment")
+                        if fid and sentiment:
+                            await db.feedback.update_one(
+                                {"feedback_id": fid},
+                                {"$set": {"sentiment_label": sentiment}},
+                            )
+                elif module_key == "personas":
+                    await db.ai_insights.update_one(
+                        {"project_id": project_id, "job_id": job_id},
+                        {"$set": {"personas": result.get("personas", []),
+                                  "updated_at": utc_now_iso()}},
+                    )
+                elif module_key == "investor":
+                    # Also mirror legacy `investor_readiness_score`
+                    await db.ai_insights.update_one(
+                        {"project_id": project_id, "job_id": job_id},
+                        {"$set": {
+                            "investor": result,
+                            "investor_readiness_score": int(
+                                result.get("investor_readiness_score", 0)
+                            ),
+                            "updated_at": utc_now_iso(),
+                        }},
+                    )
+                elif module_key == "competitor_intel":
+                    # Mirror simplified competitors list for legacy field
+                    simple = [
+                        {"name": c["name"],
+                         "strengths": c.get("strengths", ""),
+                         "weaknesses": c.get("weaknesses", "")}
+                        for c in result.get("table", []) or []
+                    ]
+                    set_payload = {"competitor_intel": result,
+                                   "updated_at": utc_now_iso()}
+                    if simple:
+                        set_payload["competitors"] = simple
+                    await db.ai_insights.update_one(
+                        {"project_id": project_id, "job_id": job_id},
+                        {"$set": set_payload},
+                    )
+                else:
+                    await db.ai_insights.update_one(
+                        {"project_id": project_id, "job_id": job_id},
+                        {"$set": {module_key: result, "updated_at": utc_now_iso()}},
+                    )
+
+                completed_count += 1
+                progress = int(round(5 + (completed_count / total) * 90))
+                await db.analysis_jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"progress": progress, "updated_at": utc_now_iso()},
+                     "$push": {"completed_modules": label}},
+                )
+                return (module_key, "ok", None)
+            except Exception as e:
+                completed_count += 1
+                progress = int(round(5 + (completed_count / total) * 90))
+                err = str(e)[:300]
+                logger.exception("Module %s failed", label)
+                await db.analysis_jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"progress": progress, "updated_at": utc_now_iso()},
+                     "$push": {"failed_modules": {"module": label, "error": err}}},
+                )
+                return (module_key, "failed", err)
+
+        # Launch all modules concurrently. Even if one throws unexpectedly,
+        # gather(...) collects results because we catch inside _run_one.
+        tasks = [_run_one(k, lbl, r) for (k, lbl, r) in ANALYSIS_MODULES]
+        results = await asyncio.gather(*tasks)
+
+        ok = [r for r in results if r[1] == "ok"]
+        failed = [r for r in results if r[1] == "failed"]
+
+        if not ok:
+            final_status = "failed"
+        elif failed:
+            final_status = "partial"
+        else:
+            final_status = "done"
+
+        # Finalize: read full insight, mirror innovation_score onto project
+        insight = await db.ai_insights.find_one(
+            {"project_id": project_id, "job_id": job_id}, {"_id": 0}
+        ) or {}
+        innovation = (insight.get("pmf") or {}).get("differentiation_score", 0) or 0
+        await db.projects.update_one(
+            {"project_id": project_id},
+            {"$set": {
+                "status": "analyzed" if final_status != "failed" else "collecting",
+                "updated_at": utc_now_iso(),
+                "innovation_score": int(innovation),
+            }},
+        )
+        await db.analysis_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {
+                "status": final_status,
+                "progress": 100,
+                "current_module": "Complete" if final_status != "failed" else "Failed",
+                "completed_at": utc_now_iso(),
+                "updated_at": utc_now_iso(),
+                "result_reference": insight_id,
+            }},
+        )
+        await log_action(
+            db, "project.analyze",
+            user_id=user_id, user_email=user_email,
+            resource=project_id,
+            metadata={
+                "job_id": job_id,
+                "status": final_status,
+                "modules_ok": [r[0] for r in ok],
+                "modules_failed": [r[0] for r in failed],
+            },
+        )
+
+    except Exception as e:
+        logger.exception("Analysis job %s crashed", job_id)
+        await db.analysis_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "failed",
+                      "error_message": str(e)[:500],
+                      "completed_at": utc_now_iso(),
+                      "updated_at": utc_now_iso()}},
+        )
+
+
+@api_router.post("/projects/{project_id}/analyze", status_code=202)
 @limiter.limit("10/minute")
 async def run_analysis(
     request: Request,
@@ -307,82 +565,117 @@ async def run_analysis(
     if not proj_doc:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    feedback_docs = await db.feedback.find(
-        {"project_id": project_id}, {"_id": 0}
-    ).to_list(2000)
-
-    if len(feedback_docs) < 1:
+    fb_count = await db.feedback.count_documents({"project_id": project_id})
+    if fb_count < 1:
         raise HTTPException(
             status_code=400,
             detail="Collect at least 1 feedback response before running analysis.",
         )
 
-    try:
-        result = await analyze_project(proj_doc, feedback_docs)
-    except Exception as e:
-        logger.exception("AI analysis failed")
-        raise HTTPException(status_code=502, detail=f"AI analysis failed: {e}")
+    # Reuse an already-running job if present
+    in_flight = await db.analysis_jobs.find_one(
+        {"project_id": project_id, "status": {"$in": ["queued", "processing"]}},
+        {"_id": 0},
+    )
+    if in_flight:
+        return {
+            "success": True,
+            "job_id": in_flight["job_id"],
+            "status": in_flight["status"],
+            "message": "Analysis already in progress",
+        }
 
-    # Persist per-feedback sentiment labels
-    for item in result.get("per_feedback_sentiment", []):
-        fid = item.get("feedback_id")
-        sentiment = item.get("sentiment")
-        if fid and sentiment:
-            await db.feedback.update_one(
-                {"feedback_id": fid}, {"$set": {"sentiment_label": sentiment}}
-            )
-
-    try:
-        insight = AIInsight(
-            project_id=project_id,
-            validation_score=int(result["validation_score"]),
-            demand_prediction=result["demand_prediction"],
-            investor_readiness_score=int(result["investor_readiness_score"]),
-            sentiment_breakdown=result["sentiment_breakdown"],
-            purchase_intent_breakdown=result["purchase_intent_breakdown"],
-            trends=result["trends"],
-            pain_points=result["pain_points"],
-            competitors=result["competitors"],
-            business_models=result["business_models"],
-            revenue_models=result["revenue_models"],
-            customer_segments=result["customer_segments"],
-            report=result["report"],
-            pmf=result.get("pmf", {}),
-            personas=result.get("personas", []),
-            competitor_intel=result.get("competitor_intel", {}),
-            investor=result.get("investor", {}),
-            swot=result.get("swot", {}),
-            bmc=result.get("bmc", {}),
-            success_prediction=result.get("success_prediction", {}),
-            pitch_deck_slides=result.get("pitch_deck_slides", []),
-            total_responses=len(feedback_docs),
-            model=AI_MODEL_NAME,
-        )
-    except Exception as e:
-        logger.exception("AI output did not match schema")
-        raise HTTPException(
-            status_code=502, detail=f"AI returned malformed output: {e}"
-        )
-
-    await db.ai_insights.insert_one(insight.model_dump())
-    innovation = (result.get("pmf") or {}).get("differentiation_score", 0) or 0
-    await db.projects.update_one(
-        {"project_id": project_id},
+    job_id = f"job_{uuid.uuid4().hex[:14]}"
+    now = utc_now_iso()
+    await db.analysis_jobs.insert_one(
         {
-            "$set": {
-                "status": "analyzed",
-                "updated_at": utc_now_iso(),
-                "innovation_score": int(innovation),
-            }
-        },
+            "job_id": job_id,
+            "project_id": project_id,
+            "owner_id": current_user.user_id,
+            "status": "queued",
+            "progress": 0,
+            "current_module": "Queued",
+            "completed_modules": [],
+            "failed_modules": [],
+            "started_at": now,
+            "completed_at": None,
+            "error_message": None,
+            "result_reference": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    asyncio.create_task(
+        _run_analysis_job(job_id, project_id, current_user.user_id, current_user.email)
     )
     await log_action(
-        db, "project.analyze",
+        db, "project.analyze.queued",
         user_id=current_user.user_id, user_email=current_user.email,
-        resource=project_id,
-        metadata={"validation_score": insight.validation_score},
+        resource=project_id, metadata={"job_id": job_id},
     )
-    return insight.model_dump()
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Analysis started",
+    }
+
+
+@api_router.get("/analyze/status/{job_id}")
+async def analyze_status(
+    job_id: str, current_user: User = Depends(get_current_user)
+):
+    job = await db.analysis_jobs.find_one({"job_id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("owner_id") and job["owner_id"] != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return {
+        "job_id": job["job_id"],
+        "project_id": job["project_id"],
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "current_module": job.get("current_module"),
+        "completed_modules": job.get("completed_modules", []),
+        "failed_modules": job.get("failed_modules", []),
+        "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at"),
+        "error_message": job.get("error_message"),
+    }
+
+
+@api_router.get("/analyze/result/{job_id}")
+async def analyze_result(
+    job_id: str, current_user: User = Depends(get_current_user)
+):
+    job = await db.analysis_jobs.find_one({"job_id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("owner_id") and job["owner_id"] != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    insight = await db.ai_insights.find_one(
+        {"project_id": job["project_id"], "job_id": job_id}, {"_id": 0}
+    )
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "current_module": job.get("current_module"),
+        "completed_modules": job.get("completed_modules", []),
+        "failed_modules": job.get("failed_modules", []),
+        "insight": insight,
+    }
+
+
+# Legacy endpoint kept for backward compatibility
+@api_router.get("/projects/{project_id}/analyze/jobs/{job_id}")
+async def analysis_job_status_legacy(
+    project_id: str,
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    return await analyze_result(job_id, current_user)
 
 
 # ----------------------------------------------------------------

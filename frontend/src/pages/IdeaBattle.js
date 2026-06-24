@@ -83,10 +83,10 @@ export default function IdeaBattle() {
     };
 
     const radarData = result
-        ? Object.entries(result.criteria).map(([k, v]) => ({
-              criterion: LABELS[k] || k,
-              A: v.a,
-              B: v.b,
+        ? (result.criteria || []).map((c) => ({
+              criterion: c.name,
+              A: c.a,
+              B: c.b,
           }))
         : [];
 
@@ -268,20 +268,21 @@ export default function IdeaBattle() {
                     >
                         <div className="cm-label">Criterion-by-criterion</div>
                         <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {Object.entries(result.criteria).map(([k, v]) => (
+                            {(result.criteria || []).map((c, idx) => (
                                 <div
-                                    key={k}
+                                    key={c.name || idx}
+                                    data-testid={`battle-criterion-${(c.name || "").replace(/\s+/g, "-").toLowerCase()}`}
                                     className="rounded-xl border border-white/5 bg-white/2 p-3"
                                 >
-                                    <div className="cm-label">{LABELS[k] || k}</div>
+                                    <div className="cm-label">{c.name}</div>
                                     <div className="mt-2 flex items-center justify-between text-sm">
-                                        <span className="text-amber-300 font-mono">A: {v.a}</span>
+                                        <span className="text-amber-300 font-mono">A: {c.a}</span>
                                         <span className="text-emerald-300 font-mono">
-                                            B: {v.b}
+                                            B: {c.b}
                                         </span>
                                     </div>
                                     <div className="mt-2 text-xs text-zinc-400 leading-snug">
-                                        {v.note}
+                                        {c.note}
                                     </div>
                                 </div>
                             ))}

@@ -62,6 +62,7 @@ class Project(BaseModel):
     public_link_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
     status: str = "collecting"  # "collecting" | "analyzed"
     is_public: bool = False     # opt-in to leaderboard
+    is_demo: bool = False       # synthetic showcase data
     innovation_score: int = 0    # filled from PMF differentiation
     community_likes: int = 0
     created_at: str = Field(default_factory=utc_now_iso)
@@ -154,7 +155,7 @@ class TokenResponse(BaseModel):
 class FounderProfile(BaseModel):
     model_config = ConfigDict(extra="ignore")
     user_id: str
-    budget: str
+    budget: float                       # USD numeric (int or decimal)
     skills: List[str]
     experience_years: int
     industry_interests: List[str]
@@ -166,7 +167,7 @@ class FounderProfile(BaseModel):
 
 
 class FounderProfilePayload(BaseModel):
-    budget: str
+    budget: float = Field(ge=0, le=1_000_000_000)
     skills: List[str]
     experience_years: int = Field(ge=0, le=60)
     industry_interests: List[str]

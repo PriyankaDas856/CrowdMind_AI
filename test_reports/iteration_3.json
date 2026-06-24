@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 3 backend tests for async modular analyze pipeline + schema fixes. 11/14 passed. Major win: POST /api/projects/{id}/analyze NOW returns 202 in <2s (was 502 timeout in iteration 2), 8 modules complete in ~30s via asyncio.gather. Owner-only 403 works, idempotent same-job re-POST works, project.status flips to 'analyzed', innovation_score = pmf.differentiation_score, PDF works. FounderProfile schema fixes verified: budget is numeric (float), string '25k' returns 422, GET /founder/profile is FLAT, GET /founder/insight new endpoint works. 3 failures: 1 real backend bug (pmf sub-score key names mismatch the spec), 2 test-payload mismatches (battle takes project_a_id/project_b_id not idea_a/idea_b; leaderboard returns {items, sort} wrapper not a bare list).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/analyze/result/{job_id} -> insight.pmf",
+       "issue": "pmf returns keys {pmf_score, demand_score, market_readiness_score, differentiation_score, ...} but spec/PRD requires 5 sub-scores {problem_severity_score, solution_fit_score, differentiation_score, willingness_to_pay_score, retention_score}. Only differentiation_score matches. Either ai_service.analyze_pmf prompt/schema needs to be updated to emit the 5 spec-named sub-scores, or PRD/tests need to be aligned to the actual schema. innovation_score mirroring still works because differentiation_score is present.",
+       "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/battle",
+       "issue": "Endpoint requires {project_a_id, project_b_id} (project references in DB) — the review-request example used free-text {idea_a, idea_b} which 422s. Either accept free-text ideas (per spec wording 'idea_a/idea_b') or document the project-id-only contract. Could not validate the 7-criteria array shape in this run because of payload mismatch."},
+      {"endpoint": "GET /api/leaderboard",
+       "issue": "Returns {items:[...], sort:'validation'} wrapper, not a bare list. Iteration-2 docs/tests may have assumed a list. Either is fine — just pick one and document. Functionality (filtering analyzed+public, sort param) works."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test_v3.py",
+    "/app/test_reports/pytest/pytest_v3_results.xml"
+  ],
+  "action_items": [
+    "HIGH: Fix ai_service.analyze_pmf so insight.pmf contains the 5 spec sub-scores: problem_severity_score, solution_fit_score, differentiation_score, willingness_to_pay_score, retention_score (plus qualitative narrative). Current keys (pmf_score, demand_score, market_readiness_score) don't match the spec.",
+    "Decide POST /api/battle payload: accept {idea_a, idea_b} text per spec OR keep {project_a_id, project_b_id} only and update docs.",
+    "Decide GET /api/leaderboard response shape: bare list vs {items, sort} wrapper, then align FE + docs.",
+    "After fixing pmf sub-scores, re-run backend_test_v3.py::test_05_result_full_schema to validate full schema (personas, competitor_intel table/gaps/advantages/blue_ocean, investor 5 scores, swot 4 quadrants, bmc 9 cells, success_prediction 1y/3y/5y, 10 pitch slides)."
+  ],
+  "critical_code_review_comments": [
+    "Async pipeline conversion is solid: asyncio.create_task(_run_analysis_job) + per-module gather with try/except in _run_one — failures don't cascade, final status correctly resolves to done|partial|failed.",
+    "Idempotency check (in-flight job lookup by project_id + status in [queued,processing]) correctly returns same job_id on repeat POST. Verified by test_02.",
+    "Owner-only enforcement on /analyze/status and /analyze/result returns 403 for other users. Verified by test_03.",
+    "innovation_score = pmf.differentiation_score mirroring on project finalize works (test_06).",
+    "Founder budget schema fix to float verified end-to-end: 25000.50 accepted, '25k' rejected with 422.",
+    "Legacy GET /api/projects/{id}/analyze/jobs/{job_id} alias kept — good for FE backward compat.",
+    "Consider adding a max-retry/timeout per module inside _run_one so a single hanging Claude call cannot stall the whole job indefinitely.",
+    "ai_insights document is keyed by (project_id, job_id) but GET /projects/{id} reads the latest by generated_at — verify that finalized job's generated_at is touched on finalize so the read picks up the new insight (currently generated_at is set on skeleton insert only)."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test_v3.py (new)"],
+  "success_rate": {"backend": "79% (11/14)", "frontend": "n/a"},
+  "test_credentials": "Fresh founder_<uuid>@crowdmind.io / TestPass123! and reviewer_<uuid>@crowdmind.io / TestPass123! registered per run.",
+  "seed_data_creation": "1 project 'AsyncTest TEST' + 1 reviewer feedback + 1 founder profile + 1 founder insight + 1 battle attempt (failed at validation). Not cleaned up.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app && python -m pytest backend/tests/backend_test_v3.py -v --tb=short. Iter-3 confirms the 502 critical bug from iter-2 is FIXED — async pipeline now returns 202 in <2s and finishes 8 modules in ~30s. The remaining bug to chase is the pmf sub-score key names (test_05). For the battle test re-run, change payload to {project_a_id: pid_a, project_b_id: pid_b} unless main agent adds idea_a/idea_b support. Leaderboard test should read body['items'] instead of body directly.",
+  "rca of the issue": "PMF sub-score mismatch: ai_service.analyze_pmf returns its own ad-hoc score set (pmf_score, demand_score, market_readiness_score, differentiation_score) instead of the canonical 5 names the PRD/spec calls for (problem_severity, solution_fit, differentiation, willingness_to_pay, retention). Likely the Claude prompt in analyze_pmf was not updated to emit the new keys when modularizing. Fix in /app/backend/ai_service.py — update analyze_pmf system prompt + result mapping to emit the 5 spec keys; keep differentiation_score so innovation_score continues to mirror correctly."
+}
