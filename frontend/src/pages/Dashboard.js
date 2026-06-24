@@ -115,12 +115,26 @@ export default function Dashboard() {
             </div>
 
             {loading ? (
-                <div className="py-20 flex items-center justify-center text-zinc-500">
-                    <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading dashboard…
-                </div>
+                <>
+                    <SkeletonHealthScore testId="skeleton-health" />
+                    <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <SkeletonStatCard testId="skeleton-stat-1" />
+                        <SkeletonStatCard testId="skeleton-stat-2" />
+                        <SkeletonStatCard testId="skeleton-stat-3" />
+                        <SkeletonStatCard testId="skeleton-stat-4" />
+                    </div>
+                    <div className="mt-12 grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <SkeletonProjectCard testId="skeleton-project-1" />
+                        <SkeletonProjectCard testId="skeleton-project-2" />
+                        <SkeletonProjectCard testId="skeleton-project-3" />
+                    </div>
+                </>
             ) : (
                 <>
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 cm-stagger">
+                    {/* HEALTH SCORE HERO */}
+                    {stats?.analyzed_projects > 0 && <HealthScoreCard stats={stats} />}
+
+                    <div className={`${stats?.analyzed_projects > 0 ? "mt-6" : ""} grid sm:grid-cols-2 lg:grid-cols-4 gap-4 cm-stagger`}>
                         <StatCard
                             icon={Activity}
                             label="Projects"
@@ -136,11 +150,11 @@ export default function Dashboard() {
                             testId="stat-total-responses"
                         />
                         <StatCard
-                            icon={BarChart3}
-                            label="Avg score"
-                            value={stats?.avg_validation_score ?? "—"}
+                            icon={Target}
+                            label="Avg PMF"
+                            value={stats?.avg_pmf_score ?? "—"}
                             sub="0–100"
-                            testId="stat-avg-score"
+                            testId="stat-avg-pmf"
                         />
                         <StatCard
                             icon={Brain}
@@ -213,17 +227,27 @@ export default function Dashboard() {
                     </div>
 
                     {projects.length === 0 ? (
-                        <div
-                            className="mt-6 cm-glass rounded-3xl p-10 text-center"
-                            data-testid="empty-projects-state"
-                        >
-                            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto">
-                                <Sparkles className="w-6 h-6 text-amber-400" />
-                            </div>
-                            <h3 className="mt-5 font-display font-bold text-2xl tracking-tight">
-                                Validate your first idea
-                            </h3>
-                            <p className="mt-2 text-zinc-400 max-w-md mx-auto">
+                        <EmptyState
+                            variant="projects"
+                            testId="empty-projects-state"
+                            title="Validate your first idea"
+                            body="Create a project, collect feedback from real people, then let CrowdMind score and analyze it."
+                            cta="New project"
+                            ctaTo="/projects/new"
+                        />
+                    ) : (
+                        <div className="mt-6 grid md:grid-cols-2 lg:grid-cols-3 gap-4 cm-stagger">
+                            {projects.map((p) => (
+                                <ProjectCard key={p.project_id} p={p} />
+                            ))}
+                        </div>
+                    )}
+                </>
+            )}
+        </AppLayout>
+    );
+}
+                     <p className="mt-2 text-zinc-400 max-w-md mx-auto">
                                 Create a project, collect feedback from real people, then let
                                 CrowdMind score and analyze it.
                             </p>

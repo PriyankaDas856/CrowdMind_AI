@@ -693,7 +693,10 @@ async def dashboard_stats(current_user: User = Depends(get_current_user)):
     total_responses = 0
     avg_score = 0
     analyzed_count = 0
-    scores = []
+    scores: List[int] = []
+    pmf_scores: List[int] = []
+    investor_scores: List[int] = []
+    success_scores: List[int] = []
 
     if project_ids:
         total_responses = await db.feedback.count_documents(
@@ -708,16 +711,49 @@ async def dashboard_stats(current_user: User = Depends(get_current_user)):
             if not cur or ins["generated_at"] > cur["generated_at"]:
                 latest_by_project[ins["project_id"]] = ins
         for ins in latest_by_project.values():
-            scores.append(ins["validation_score"])
+            scores.append(int(ins.get("validation_score", 0) or 0))
+            pmf_scores.append(int((ins.get("pmf") or {}).get("pmf_score", 0) or 0))
+            investor_scores.append(
+                int((ins.get("investor") or {}).get(
+                    "investor_readiness_score",
+                    ins.get("investor_readiness_score", 0),
+                ) or 0)
+            )
+            success_scores.append(
+                int((ins.get("success_prediction") or {}).get(
+                    "one_year_probability", 0) or 0)
+            )
             analyzed_count += 1
         if scores:
             avg_score = round(sum(scores) / len(scores))
+
+    def _avg(xs):
+        return round(sum(xs) / len(xs)) if xs else 0
+
+    avg_pmf = _avg(pmf_scores)
+    avg_investor = _avg(investor_scores)
+    avg_success = _avg(success_scores)
+
+    # Composite Startup Health Score — equal weighting of the four signals
+    components = [avg_score, avg_pmf, avg_investor, avg_success]
+    non_zero = [c for c in components if c > 0]
+    startup_health_score = round(sum(non_zero) / len(non_zero)) if non_zero else 0
 
     return {
         "total_projects": total_projects,
         "total_responses": total_responses,
         "avg_validation_score": avg_score,
+        "avg_pmf_score": avg_pmf,
+        "avg_investor_score": avg_investor,
+        "avg_success_probability": avg_success,
         "analyzed_projects": analyzed_count,
+        "startup_health_score": startup_health_score,
+        "health_breakdown": {
+            "validation": avg_score,
+            "pmf": avg_pmf,
+            "investor": avg_investor,
+            "success_1y": avg_success,
+        },
     }
 
 
