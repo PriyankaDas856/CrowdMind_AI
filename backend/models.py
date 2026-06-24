@@ -112,7 +112,7 @@ class AIInsight(BaseModel):
     competitors: List[Dict[str, str]]  # [{name, strengths, weaknesses}]
     business_models: List[str]
     revenue_models: List[str]
-    customer_segments: List[Dict[str, str]]  # [{name, description, percent}]
+    customer_segments: List[Dict[str, Any]]  # [{name, description, percent}]
     report: Dict[str, Any]  # executive_summary, risks, opportunities, improvements, gtm, pricing, pitch_deck
     total_responses: int
     model: str
