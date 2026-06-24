@@ -14,6 +14,9 @@ import Dashboard from "./pages/Dashboard";
 import CreateProject from "./pages/CreateProject";
 import ProjectDetail from "./pages/ProjectDetail";
 import FeedbackSubmit from "./pages/FeedbackSubmit";
+import FounderTwin from "./pages/FounderTwin";
+import IdeaBattle from "./pages/IdeaBattle";
+import Leaderboard from "./pages/Leaderboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { Toaster } from "sonner";
 
@@ -30,6 +33,7 @@ function AppRouter() {
             <Route path="/register" element={<Register />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/feedback/:publicLinkId" element={<FeedbackSubmit />} />
+            <Route path="/leaderboard" element={<Leaderboard />} />
             <Route
                 path="/dashboard"
                 element={
@@ -59,6 +63,22 @@ function AppRouter() {
                 element={
                     <ProtectedRoute>
                         <ProjectDetail />
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/founder"
+                element={
+                    <ProtectedRoute>
+                        <FounderTwin />
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/battle"
+                element={
+                    <ProtectedRoute>
+                        <IdeaBattle />
                     </ProtectedRoute>
                 }
             />

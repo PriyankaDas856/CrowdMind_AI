@@ -6,6 +6,9 @@ import {
     LogOut,
     Sparkles,
     User as UserIcon,
+    UserCircle2,
+    Swords,
+    Trophy,
 } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
@@ -21,6 +24,9 @@ import {
 const navItems = [
     { to: "/dashboard", label: "Overview", icon: LayoutDashboard },
     { to: "/projects", label: "Projects", icon: FolderKanban },
+    { to: "/founder", label: "Founder", icon: UserCircle2 },
+    { to: "/battle", label: "Battle", icon: Swords },
+    { to: "/leaderboard", label: "Leaderboard", icon: Trophy },
 ];
 
 export default function AppLayout({ children }) {

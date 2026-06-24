@@ -1,0 +1,57 @@
+{
+  "summary": "Iteration 2 backend tests for the M1-M12 CrowdMind AI upgrade. Added /app/backend/tests/backend_test_v2.py (25 tests). Result: 22 passed / 3 failed. All 23 iteration-1 regression assertions are also covered. Critical: POST /api/projects/{id}/analyze returns HTTP 502 to the client (Cloudflare/ingress idle-timeout ~60s) even though the FastAPI handler finishes server-side and persists the insight — dashboard, leaderboard, PDF, audit logs all confirm the analysis succeeded in DB. Two failures cascade from this 502 (test_02 + test_03). The third failure (test_10) is a schema doc discrepancy: GET /api/founder/profile returns {profile:{...}, insight:null} (wrapped), not a flat object. Founder budget is stored as a STRING (model FounderProfile.budget: str), not numeric.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/projects/{project_id}/analyze",
+        "issue": "Returns HTTP 502 Bad Gateway from Cloudflare after ~60s. Backend DOES complete the work — insight is persisted, project.status flips to 'analyzed', project.innovation_score is set, and audit log 'project.analyze' is written. So the client cannot read the response payload (no schema validation possible from client side). Two consecutive attempts at 60.1s and 125.4s both 502'd. Root cause: Claude Sonnet 4.5 call with the new 12-module ANALYSIS_INSTRUCTIONS exceeds the upstream proxy idle timeout. Fix options: (a) split the prompt into 2-3 smaller Claude calls and merge, (b) return a job_id immediately and expose GET /api/projects/{id}/analyze/status for polling, (c) stream/SSE heartbeats so the proxy doesn't kill the connection, (d) reduce verbosity of the system prompt.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/founder/profile",
+        "issue": "Returns {\"profile\": {...}, \"insight\": null|{...}} instead of a flat FounderProfile object. PRD reads as if a flat object is returned. Either update PRD/docs to describe the wrapper, or change the endpoint to return the flat profile and expose /api/founder/insight separately."
+      },
+      {
+        "endpoint": "POST /api/founder/profile",
+        "issue": "FounderProfile.budget is typed as str. Numeric input (e.g. 50000) is rejected with 422. Consider Union[int, str] or document the string format explicitly so the FE can validate."
+      },
+      {
+        "endpoint": "POST /api/battle",
+        "issue": "Returned 'criteria' is a dict keyed by criterion name ({market_size:{a,b,note}, ...}) — PRD wording 'criteria (7 criteria each with {a,b,note})' suggested a list. Either is workable; align docs + FE accordingly."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test_v2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_v2_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Make /api/projects/{id}/analyze complete within ~55s OR switch to async job pattern (job_id + polling) OR stream the response. Right now end-users see 502 every time even though the work succeeded — they have to refresh /projects/{id} to discover the insight is ready.",
+    "Decide and document the GET /api/founder/profile shape (wrapped {profile,insight} vs flat) and align with the FE.",
+    "Decide budget type (string vs numeric) on FounderProfile and document it.",
+    "Decide battle criteria shape (dict-by-name vs list) and document it.",
+    "Once /analyze proxy timeout is fixed, re-run backend_test_v2.py to verify the extended schema assertions in test_02 (M1 pmf 5 scores, M2 3-5 personas, M3 competitor_intel table/gaps/advantages/blue_ocean, M4 investor 5 scores + reasoning, M5 swot, M6 9-cell BMC, M7 1y/3y/5y probabilities, M8 10 pitch deck slides) and the innovation_score=pmf.differentiation_score assertion in test_03."
+  ],
+  "critical_code_review_comments": [
+    "/api/projects/{id}/analyze runs a single very long Claude call inside the request lifecycle — this is fragile behind a proxy. Convert to background task + status endpoint, or shard the prompt.",
+    "Rate limit decorator is wired (@limiter.limit('10/minute') on /analyze) — verified by code grep in test_22. Live verification skipped to avoid burning AI quota.",
+    "Audit logging confirmed: project.create, project.publish, project.unpublish, project.analyze, project.report.pdf, founder.profile.upsert, founder.analyze, battle.compare all written to db.audit_logs.",
+    "PDF endpoint correctly returns 200 + application/pdf (>1KB, %PDF magic) for owner, 400 if no insight, 404 for non-owner — all green.",
+    "Admin RBAC: 403 for normal user, 200 after setting role='admin' in db.users — all three admin endpoints work.",
+    "Leaderboard correctly filters is_public=true AND status='analyzed', supports sort=validation|investor|pmf|innovation|trending|community, and /leaderboard/like/{public_link_id} increments community_likes (returns 404 for unknown link)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test_v2.py (new — 25 tests covering M1-M12, publish, PDF, founder, battle, leaderboard, audit, admin, rate limit)"
+  ],
+  "success_rate": {"backend": "88% (22/25 in iteration_2; the 3 fails are 1 critical infra + 2 doc/schema)", "frontend": "n/a"},
+  "test_credentials": "Tests register fresh founder_<uuid>@crowdmind.io / Founder123!, reviewer_<uuid>@crowdmind.io / Reviewer123!, admin_<uuid>@crowdmind.io / Admin12345!. Admin user is promoted via mongo update (db.users.update_one role='admin').",
+  "seed_data_creation": "Two projects ('AlphaIdea TEST', 'BetaIdea TEST') created and one reviewer feedback submitted on p1. Cleanup test_24 deletes both projects (cascades feedback + insights). FounderProfile + FounderInsight + audit_logs + battle docs remain.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app && python -m pytest backend/tests/backend_test_v2.py -v --tb=short. /analyze currently 502s at the proxy after 60s; when the analyze endpoint is fixed (async job or sharded calls) re-run and tests 02 + 03 will validate the full extended insight schema. Test 10 expects flat founder profile; if main agent intentionally keeps the {profile,insight} wrapper, change the assertion to body['profile']['budget'] == '50000 USD seed'. Iteration 1's backend_test.py is still authoritative for the un-touched legacy endpoints.",
+  "rca of the issue": "Cloudflare/ingress proxy returns 502 to client after ~60s while the FastAPI worker is still awaiting the Claude Sonnet 4.5 completion. Backend logs show LiteLLM completion started and finished after the proxy already gave up; the insight ends up persisted, audit log is written, project.status='analyzed', innovation_score is set — but the user never gets the JSON payload and gets a Cloudflare error page instead. Reproduction: register founder, create project, POST /analyze with Bearer token, wait — at ~60s client receives Cloudflare 502; immediately GET /projects/{id} and observe insight!=null. Mitigation: convert /analyze to a 202-Accepted async job (background task storing partial insight), and add GET /analyze/status; or shard the giant 12-module prompt into 3-4 smaller Claude calls run in parallel/sequence with intermediate flush; or proxy SSE keep-alive."
+}

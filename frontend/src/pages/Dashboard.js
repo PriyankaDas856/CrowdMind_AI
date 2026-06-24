@@ -9,6 +9,9 @@ import {
     Brain,
     ArrowUpRight,
     Loader2,
+    UserCircle2,
+    Swords,
+    Trophy,
 } from "lucide-react";
 import { api } from "../lib/api";
 import AppLayout from "../components/AppLayout";
@@ -146,6 +149,56 @@ export default function Dashboard() {
                             sub="generated"
                             testId="stat-analyzed"
                         />
+                    </div>
+
+                    {/* Advanced module shortcuts */}
+                    <div className="mt-12 grid sm:grid-cols-3 gap-4 cm-stagger">
+                        {[
+                            {
+                                to: "/founder",
+                                icon: UserCircle2,
+                                title: "Founder Twin AI",
+                                body: "Score your founder profile and unlock industries built for you.",
+                                cta: "Open Founder",
+                                testid: "shortcut-founder",
+                            },
+                            {
+                                to: "/battle",
+                                icon: Swords,
+                                title: "Idea Battle Mode",
+                                body: "Put two of your projects head-to-head and let AI decide.",
+                                cta: "Start a battle",
+                                testid: "shortcut-battle",
+                            },
+                            {
+                                to: "/leaderboard",
+                                icon: Trophy,
+                                title: "Public Leaderboard",
+                                body: "See where the world's most validated ideas rank — publish to join.",
+                                cta: "View leaderboard",
+                                testid: "shortcut-leaderboard",
+                            },
+                        ].map((s) => (
+                            <Link
+                                key={s.to}
+                                to={s.to}
+                                data-testid={s.testid}
+                                className="cm-card rounded-2xl p-6 group"
+                            >
+                                <div className="w-11 h-11 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                                    <s.icon className="w-5 h-5 text-amber-400" />
+                                </div>
+                                <div className="mt-4 font-display font-bold text-lg">
+                                    {s.title}
+                                </div>
+                                <div className="mt-2 text-sm text-zinc-400 leading-relaxed">
+                                    {s.body}
+                                </div>
+                                <div className="mt-5 inline-flex items-center gap-1.5 text-xs text-amber-400 font-mono group-hover:text-amber-300">
+                                    {s.cta} <ArrowUpRight className="w-3 h-3" />
+                                </div>
+                            </Link>
+                        ))}
                     </div>
 
                     <div className="mt-12 flex items-end justify-between gap-3">

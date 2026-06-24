@@ -9,24 +9,35 @@ from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from motor.motor_asyncio import AsyncIOMotorClient
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 from ai_service import AI_MODEL_NAME, analyze_project  # noqa: E402
+from audit import log_action  # noqa: E402
 from auth import auth_router, get_current_user, get_db  # noqa: E402
+from extras import admin_router, battle_router, leaderboard_router  # noqa: E402
+from founder import router as founder_router  # noqa: E402
 from models import (  # noqa: E402
     AIInsight,
     Feedback,
     FeedbackCreate,
     Project,
     ProjectCreate,
+    PublishPayload,
     User,
     utc_now_iso,
 )
+from pdf_service import build_project_pdf  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,15 +51,29 @@ db_name = os.environ["DB_NAME"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
-app = FastAPI(title="CrowdMind AI")
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
+app = FastAPI(title="CrowdMind AI", version="0.2.0")
 app.state.db = db
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please slow down."},
+    )
+
 
 api_router = APIRouter(prefix="/api")
 
 
 @api_router.get("/")
 async def root():
-    return {"app": "CrowdMind AI", "status": "ok"}
+    return {"app": "CrowdMind AI", "status": "ok", "version": "0.2.0"}
 
 
 # ----------------------------------------------------------------
@@ -70,6 +95,11 @@ async def create_project(
         location=payload.location.strip(),
     )
     await db.projects.insert_one(project.model_dump())
+    await log_action(
+        db, "project.create",
+        user_id=current_user.user_id, user_email=current_user.email,
+        resource=project.project_id,
+    )
     return project
 
 
@@ -123,7 +153,64 @@ async def delete_project(
         raise HTTPException(status_code=404, detail="Project not found")
     await db.feedback.delete_many({"project_id": project_id})
     await db.ai_insights.delete_many({"project_id": project_id})
+    await log_action(
+        db, "project.delete",
+        user_id=current_user.user_id, user_email=current_user.email,
+        resource=project_id,
+    )
     return {"ok": True}
+
+
+@projects_router.post("/{project_id}/publish")
+async def toggle_publish(
+    project_id: str,
+    payload: PublishPayload,
+    current_user: User = Depends(get_current_user),
+):
+    res = await db.projects.update_one(
+        {"project_id": project_id, "owner_id": current_user.user_id},
+        {"$set": {"is_public": bool(payload.is_public), "updated_at": utc_now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await log_action(
+        db, "project.publish" if payload.is_public else "project.unpublish",
+        user_id=current_user.user_id, user_email=current_user.email,
+        resource=project_id,
+    )
+    return {"is_public": payload.is_public}
+
+
+@projects_router.get("/{project_id}/report.pdf")
+async def download_report_pdf(
+    project_id: str, current_user: User = Depends(get_current_user)
+):
+    proj = await db.projects.find_one(
+        {"project_id": project_id, "owner_id": current_user.user_id}, {"_id": 0}
+    )
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    insight = await db.ai_insights.find_one(
+        {"project_id": project_id}, {"_id": 0}, sort=[("generated_at", -1)]
+    )
+    if not insight:
+        raise HTTPException(
+            status_code=400, detail="Run AI analysis before exporting the report."
+        )
+    pdf_bytes = build_project_pdf(proj, insight)
+    await log_action(
+        db, "project.report.pdf",
+        user_id=current_user.user_id, user_email=current_user.email,
+        resource=project_id,
+    )
+    safe_name = "".join(c if c.isalnum() else "_" for c in proj["name"])[:40] or "report"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="CrowdMind_{safe_name}.pdf"'
+        },
+    )
 
 
 # ----------------------------------------------------------------
@@ -208,7 +295,12 @@ async def list_feedback(
 # AI Analysis
 # ----------------------------------------------------------------
 @api_router.post("/projects/{project_id}/analyze")
-async def run_analysis(project_id: str, current_user: User = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def run_analysis(
+    request: Request,
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+):
     proj_doc = await db.projects.find_one(
         {"project_id": project_id, "owner_id": current_user.user_id}, {"_id": 0}
     )
@@ -240,27 +332,55 @@ async def run_analysis(project_id: str, current_user: User = Depends(get_current
                 {"feedback_id": fid}, {"$set": {"sentiment_label": sentiment}}
             )
 
-    insight = AIInsight(
-        project_id=project_id,
-        validation_score=int(result["validation_score"]),
-        demand_prediction=result["demand_prediction"],
-        investor_readiness_score=int(result["investor_readiness_score"]),
-        sentiment_breakdown=result["sentiment_breakdown"],
-        purchase_intent_breakdown=result["purchase_intent_breakdown"],
-        trends=result["trends"],
-        pain_points=result["pain_points"],
-        competitors=result["competitors"],
-        business_models=result["business_models"],
-        revenue_models=result["revenue_models"],
-        customer_segments=result["customer_segments"],
-        report=result["report"],
-        total_responses=len(feedback_docs),
-        model=AI_MODEL_NAME,
-    )
+    try:
+        insight = AIInsight(
+            project_id=project_id,
+            validation_score=int(result["validation_score"]),
+            demand_prediction=result["demand_prediction"],
+            investor_readiness_score=int(result["investor_readiness_score"]),
+            sentiment_breakdown=result["sentiment_breakdown"],
+            purchase_intent_breakdown=result["purchase_intent_breakdown"],
+            trends=result["trends"],
+            pain_points=result["pain_points"],
+            competitors=result["competitors"],
+            business_models=result["business_models"],
+            revenue_models=result["revenue_models"],
+            customer_segments=result["customer_segments"],
+            report=result["report"],
+            pmf=result.get("pmf", {}),
+            personas=result.get("personas", []),
+            competitor_intel=result.get("competitor_intel", {}),
+            investor=result.get("investor", {}),
+            swot=result.get("swot", {}),
+            bmc=result.get("bmc", {}),
+            success_prediction=result.get("success_prediction", {}),
+            pitch_deck_slides=result.get("pitch_deck_slides", []),
+            total_responses=len(feedback_docs),
+            model=AI_MODEL_NAME,
+        )
+    except Exception as e:
+        logger.exception("AI output did not match schema")
+        raise HTTPException(
+            status_code=502, detail=f"AI returned malformed output: {e}"
+        )
+
     await db.ai_insights.insert_one(insight.model_dump())
+    innovation = (result.get("pmf") or {}).get("differentiation_score", 0) or 0
     await db.projects.update_one(
         {"project_id": project_id},
-        {"$set": {"status": "analyzed", "updated_at": utc_now_iso()}},
+        {
+            "$set": {
+                "status": "analyzed",
+                "updated_at": utc_now_iso(),
+                "innovation_score": int(innovation),
+            }
+        },
+    )
+    await log_action(
+        db, "project.analyze",
+        user_id=current_user.user_id, user_email=current_user.email,
+        resource=project_id,
+        metadata={"validation_score": insight.validation_score},
     )
     return insight.model_dump()
 
@@ -313,6 +433,10 @@ async def dashboard_stats(current_user: User = Depends(get_current_user)):
 api_router.include_router(auth_router)
 api_router.include_router(projects_router)
 api_router.include_router(feedback_router)
+api_router.include_router(founder_router)
+api_router.include_router(battle_router)
+api_router.include_router(leaderboard_router)
+api_router.include_router(admin_router)
 app.include_router(api_router)
 
 app.add_middleware(

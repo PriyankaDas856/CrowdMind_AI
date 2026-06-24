@@ -61,6 +61,9 @@ class Project(BaseModel):
     location: str
     public_link_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
     status: str = "collecting"  # "collecting" | "analyzed"
+    is_public: bool = False     # opt-in to leaderboard
+    innovation_score: int = 0    # filled from PMF differentiation
+    community_likes: int = 0
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
 
@@ -114,6 +117,17 @@ class AIInsight(BaseModel):
     revenue_models: List[str]
     customer_segments: List[Dict[str, Any]]  # [{name, description, percent}]
     report: Dict[str, Any]  # executive_summary, risks, opportunities, improvements, gtm, pricing, pitch_deck
+
+    # ---- Extended (modules M1–M8) ----
+    pmf: Dict[str, Any] = Field(default_factory=dict)            # M1
+    personas: List[Dict[str, Any]] = Field(default_factory=list)  # M2
+    competitor_intel: Dict[str, Any] = Field(default_factory=dict)  # M3
+    investor: Dict[str, Any] = Field(default_factory=dict)        # M4
+    swot: Dict[str, Any] = Field(default_factory=dict)            # M5
+    bmc: Dict[str, Any] = Field(default_factory=dict)             # M6
+    success_prediction: Dict[str, Any] = Field(default_factory=dict)  # M7
+    pitch_deck_slides: List[Dict[str, Any]] = Field(default_factory=list)  # M8 detailed slides
+
     total_responses: int
     model: str
     generated_at: str = Field(default_factory=utc_now_iso)
@@ -134,3 +148,62 @@ class LoginPayload(BaseModel):
 class TokenResponse(BaseModel):
     token: str
     user: UserPublic
+
+
+# ---------- FOUNDER TWIN (M9) ----------
+class FounderProfile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    user_id: str
+    budget: str
+    skills: List[str]
+    experience_years: int
+    industry_interests: List[str]
+    risk_appetite: str  # low | medium | high
+    time_availability: str  # part-time | full-time | weekends
+    prior_startups: int = 0
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class FounderProfilePayload(BaseModel):
+    budget: str
+    skills: List[str]
+    experience_years: int = Field(ge=0, le=60)
+    industry_interests: List[str]
+    risk_appetite: str
+    time_availability: str
+    prior_startups: int = Field(default=0, ge=0, le=20)
+
+
+class FounderInsight(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    user_id: str
+    founder_score: int
+    strengths: List[str]
+    weaknesses: List[str]
+    recommended_industries: List[str]
+    recommended_startup_types: List[str]
+    advice: List[str]
+    generated_at: str = Field(default_factory=utc_now_iso)
+
+
+# ---------- BATTLE (M10) ----------
+class BattleRequest(BaseModel):
+    project_a_id: str
+    project_b_id: str
+
+
+# ---------- PUBLISH (M11 leaderboard opt-in) ----------
+class PublishPayload(BaseModel):
+    is_public: bool
+
+
+# ---------- AUDIT LOG ----------
+class AuditLog(BaseModel):
+    log_id: str = Field(default_factory=lambda: f"log_{uuid.uuid4().hex[:12]}")
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    action: str
+    resource: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=utc_now_iso)

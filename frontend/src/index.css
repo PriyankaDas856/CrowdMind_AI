@@ -237,6 +237,18 @@
     animation-delay: 0.6s;
 }
 
+/* Webkit autofill — keep dark theme intact */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+    -webkit-text-fill-color: #f9fafb !important;
+    -webkit-box-shadow: 0 0 0px 1000px rgba(11, 15, 25, 0.95) inset !important;
+    transition: background-color 9999s ease-in-out 0s;
+    caret-color: #f9fafb;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
     width: 10px;

@@ -4,9 +4,15 @@ import {
     ArrowLeft,
     Brain,
     Copy,
+    Download,
+    FileText,
+    Globe,
     Loader2,
+    Lock,
     Share2,
+    Shield,
     Sparkles,
+    Target,
     Trash2,
     Users,
     TrendingUp,
@@ -28,7 +34,7 @@ import {
     YAxis,
     Tooltip,
 } from "recharts";
-import { api } from "../lib/api";
+import { api, API_BASE, getToken } from "../lib/api";
 import AppLayout from "../components/AppLayout";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
@@ -114,6 +120,48 @@ export default function ProjectDetail() {
     const project = data?.project;
     const feedback = data?.feedback || [];
     const insight = data?.insight;
+    const isPublic = !!project?.is_public;
+
+    const togglePublish = async () => {
+        try {
+            await api.post(`/projects/${projectId}/publish`, {
+                is_public: !isPublic,
+            });
+            toast.success(isPublic ? "Removed from leaderboard" : "Now on the leaderboard");
+            await load();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || "Could not toggle publish");
+        }
+    };
+
+    const downloadPdf = async () => {
+        try {
+            const token = getToken();
+            const res = await fetch(
+                `${API_BASE}/projects/${projectId}/report.pdf`,
+                {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {},
+                    credentials: "include",
+                }
+            );
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || "PDF export failed");
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `CrowdMind_${project.name.replace(/\W+/g, "_")}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            toast.success("Report downloaded");
+        } catch (err) {
+            toast.error(err.message || "PDF export failed");
+        }
+    };
 
     const publicLink = useMemo(() => {
         if (!project) return "";
@@ -221,6 +269,33 @@ export default function ProjectDetail() {
                         >
                             <Share2 className="w-4 h-4" /> Copy public link
                         </button>
+                        {insight && (
+                            <>
+                                <button
+                                    onClick={downloadPdf}
+                                    data-testid="download-pdf-btn"
+                                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full cm-glass border border-white/10 hover:bg-white/8 text-sm transition"
+                                >
+                                    <Download className="w-4 h-4" /> PDF
+                                </button>
+                                <button
+                                    onClick={togglePublish}
+                                    data-testid="publish-toggle-btn"
+                                    className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-full border text-sm transition ${
+                                        isPublic
+                                            ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                                            : "cm-glass border-white/10 hover:bg-white/8"
+                                    }`}
+                                >
+                                    {isPublic ? (
+                                        <Globe className="w-4 h-4" />
+                                    ) : (
+                                        <Lock className="w-4 h-4" />
+                                    )}
+                                    {isPublic ? "Published" : "Publish"}
+                                </button>
+                            </>
+                        )}
                         <button
                             onClick={runAnalysis}
                             disabled={analyzing || feedback.length < 1}
@@ -299,24 +374,31 @@ export default function ProjectDetail() {
                 </div>
             ) : (
                 <Tabs defaultValue="overview" className="mt-10">
-                    <TabsList className="cm-glass border border-white/10 rounded-full p-1 inline-flex">
-                        {[
-                            { v: "overview", l: "Overview" },
-                            { v: "report", l: "AI Report" },
-                            { v: "trends", l: "Trends" },
-                            { v: "competitors", l: "Competitors" },
-                            { v: "feedback", l: "Feedback" },
-                        ].map((t) => (
-                            <TabsTrigger
-                                key={t.v}
-                                value={t.v}
-                                data-testid={`tab-${t.v}`}
-                                className="px-4 py-2 rounded-full data-[state=active]:bg-amber-500 data-[state=active]:text-zinc-950 text-sm font-medium"
-                            >
-                                {t.l}
-                            </TabsTrigger>
-                        ))}
-                    </TabsList>
+                    <div className="overflow-x-auto -mx-1 px-1">
+                        <TabsList className="cm-glass border border-white/10 rounded-full p-1 inline-flex w-max">
+                            {[
+                                { v: "overview", l: "Overview" },
+                                { v: "pmf", l: "PMF Engine" },
+                                { v: "personas", l: "Personas" },
+                                { v: "competitors", l: "Competitors" },
+                                { v: "swot", l: "SWOT" },
+                                { v: "bmc", l: "Business Model" },
+                                { v: "investor", l: "Investor" },
+                                { v: "predictor", l: "Predictor" },
+                                { v: "report", l: "Report" },
+                                { v: "feedback", l: "Feedback" },
+                            ].map((t) => (
+                                <TabsTrigger
+                                    key={t.v}
+                                    value={t.v}
+                                    data-testid={`tab-${t.v}`}
+                                    className="px-4 py-2 rounded-full data-[state=active]:bg-amber-500 data-[state=active]:text-zinc-950 text-sm font-medium whitespace-nowrap"
+                                >
+                                    {t.l}
+                                </TabsTrigger>
+                            ))}
+                        </TabsList>
+                    </div>
 
                     {/* OVERVIEW */}
                     <TabsContent value="overview" className="mt-6 cm-stagger">
@@ -527,19 +609,55 @@ export default function ProjectDetail() {
 
                         <div className="cm-glass rounded-2xl p-6" data-testid="pitch-card">
                             <SectionTitle icon={Sparkles}>Pitch deck outline</SectionTitle>
-                            <ol className="grid sm:grid-cols-2 gap-2 text-sm text-zinc-300">
-                                {insight.report.pitch_deck.map((s, i) => (
-                                    <li
-                                        key={i}
-                                        className="flex gap-3 p-3 rounded-lg border border-white/5 bg-white/2"
-                                    >
-                                        <span className="font-mono text-amber-400 text-xs">
-                                            {String(i + 1).padStart(2, "0")}
-                                        </span>
-                                        <span>{s}</span>
-                                    </li>
-                                ))}
-                            </ol>
+                            {insight.pitch_deck_slides && insight.pitch_deck_slides.length > 0 ? (
+                                <div className="grid sm:grid-cols-2 gap-3">
+                                    {insight.pitch_deck_slides.map((sl, i) => (
+                                        <div
+                                            key={i}
+                                            className="rounded-xl border border-white/8 bg-white/3 p-4"
+                                            data-testid={`pitch-slide-${i}`}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-mono text-amber-400 text-xs">
+                                                    {String(i + 1).padStart(2, "0")}
+                                                </span>
+                                                <span className="font-display font-bold text-sm">
+                                                    {sl.title}
+                                                </span>
+                                            </div>
+                                            <ul className="mt-2 space-y-1 text-xs text-zinc-300">
+                                                {(sl.bullets || []).map((b, k) => (
+                                                    <li key={k} className="flex gap-1.5">
+                                                        <span className="text-amber-400">·</span>
+                                                        {b}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <ol className="grid sm:grid-cols-2 gap-2 text-sm text-zinc-300">
+                                    {insight.report.pitch_deck.map((s, i) => (
+                                        <li
+                                            key={i}
+                                            className="flex gap-3 p-3 rounded-lg border border-white/5 bg-white/2"
+                                        >
+                                            <span className="font-mono text-amber-400 text-xs">
+                                                {String(i + 1).padStart(2, "0")}
+                                            </span>
+                                            <span>{s}</span>
+                                        </li>
+                                    ))}
+                                </ol>
+                            )}
+                            <button
+                                onClick={downloadPdf}
+                                data-testid="pitch-download-btn"
+                                className="mt-5 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-sm transition cm-amber-glow"
+                            >
+                                <FileText className="w-4 h-4" /> Download full report PDF
+                            </button>
                         </div>
 
                         <div className="grid md:grid-cols-2 gap-4">
@@ -600,31 +718,661 @@ export default function ProjectDetail() {
                         </div>
                     </TabsContent>
 
-                    {/* COMPETITORS */}
-                    <TabsContent value="competitors" className="mt-6 cm-stagger">
-                        <div className="grid md:grid-cols-2 gap-4">
-                            {insight.competitors.map((c, i) => (
-                                <div
-                                    key={i}
-                                    className="cm-card rounded-2xl p-6"
-                                    data-testid={`competitor-${i}`}
-                                >
-                                    <div className="font-display font-bold text-xl tracking-tight">
-                                        {c.name}
-                                    </div>
-                                    <div className="mt-3">
-                                        <div className="cm-label text-emerald-300">Strengths</div>
-                                        <div className="mt-1 text-sm text-zinc-300">{c.strengths}</div>
-                                    </div>
-                                    <div className="mt-3">
-                                        <div className="cm-label text-rose-300">Weaknesses</div>
-                                        <div className="mt-1 text-sm text-zinc-300">
-                                            {c.weaknesses}
+                    {/* PMF ENGINE */}
+                    <TabsContent value="pmf" className="mt-6 cm-stagger">
+                        {!insight.pmf?.pmf_score ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to populate the PMF Engine.
+                            </div>
+                        ) : (
+                            <>
+                                <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                                    {[
+                                        { l: "PMF", v: insight.pmf.pmf_score, hl: true },
+                                        { l: "Demand", v: insight.pmf.demand_score },
+                                        { l: "Readiness", v: insight.pmf.market_readiness_score },
+                                        { l: "Differentiation", v: insight.pmf.differentiation_score },
+                                        { l: "Scalability", v: insight.pmf.scalability_score },
+                                    ].map((s) => (
+                                        <div
+                                            key={s.l}
+                                            className={`cm-card rounded-2xl p-5 ${
+                                                s.hl ? "ring-1 ring-amber-500/30" : ""
+                                            }`}
+                                            data-testid={`pmf-${s.l.toLowerCase()}`}
+                                        >
+                                            <div className="cm-label">{s.l}</div>
+                                            <div className="mt-2 font-display font-black text-4xl tracking-tighter text-amber-300">
+                                                {s.v}
+                                                <span className="text-xs font-mono text-zinc-500 ml-1">
+                                                    /100
+                                                </span>
+                                            </div>
+                                            <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                                <div
+                                                    className="h-full bg-gradient-to-r from-amber-500 to-amber-300"
+                                                    style={{ width: `${s.v}%` }}
+                                                />
+                                            </div>
                                         </div>
+                                    ))}
+                                </div>
+                                <div className="mt-4 grid md:grid-cols-2 gap-4">
+                                    <div
+                                        className="cm-card rounded-2xl p-6"
+                                        data-testid="pmf-love"
+                                    >
+                                        <SectionTitle icon={Sparkles}>
+                                            What users love
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.pmf.what_users_love || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-emerald-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div
+                                        className="cm-card rounded-2xl p-6"
+                                        data-testid="pmf-dislike"
+                                    >
+                                        <SectionTitle icon={AlertTriangle}>
+                                            What users dislike
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.pmf.what_users_dislike || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-rose-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div
+                                        className="cm-card rounded-2xl p-6"
+                                        data-testid="pmf-missing"
+                                    >
+                                        <SectionTitle icon={Lightbulb}>
+                                            Missing features
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.pmf.missing_features || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-amber-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div
+                                        className="cm-card rounded-2xl p-6"
+                                        data-testid="pmf-evolve"
+                                    >
+                                        <SectionTitle icon={Rocket}>
+                                            How the idea should evolve
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.pmf.evolution_advice || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-amber-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
                                     </div>
                                 </div>
-                            ))}
-                        </div>
+                            </>
+                        )}
+                    </TabsContent>
+
+                    {/* PERSONAS */}
+                    <TabsContent value="personas" className="mt-6 cm-stagger">
+                        {(insight.personas || []).length === 0 ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to generate personas.
+                            </div>
+                        ) : (
+                            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {insight.personas.map((p, i) => (
+                                    <div
+                                        key={i}
+                                        className="cm-card rounded-3xl p-6"
+                                        data-testid={`persona-${i}`}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center font-display font-black text-amber-300">
+                                                {(p.name || "?").charAt(0)}
+                                            </div>
+                                            <div>
+                                                <div className="font-display font-bold text-lg">
+                                                    {p.name}
+                                                </div>
+                                                <div className="text-xs text-zinc-500 font-mono">
+                                                    {p.age_range} · {p.occupation}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                            <div>
+                                                <div className="cm-label">Income</div>
+                                                <div className="text-zinc-300 mt-0.5">
+                                                    {p.income_level}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="cm-label">Channels</div>
+                                                <div className="text-zinc-300 mt-0.5 truncate">
+                                                    {(p.preferred_channels || []).join(", ")}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-4">
+                                            <div className="cm-label">Goals</div>
+                                            <ul className="mt-1 space-y-1 text-sm text-zinc-300">
+                                                {(p.goals || []).map((g, k) => (
+                                                    <li key={k} className="flex gap-2">
+                                                        <span className="text-emerald-400">▪</span>
+                                                        {g}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                        <div className="mt-3">
+                                            <div className="cm-label">Pain points</div>
+                                            <ul className="mt-1 space-y-1 text-sm text-zinc-300">
+                                                {(p.pain_points || []).map((g, k) => (
+                                                    <li key={k} className="flex gap-2">
+                                                        <span className="text-rose-400">▪</span>
+                                                        {g}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                        <div className="mt-3 text-xs text-zinc-400 border-t border-white/5 pt-3">
+                                            <div className="cm-label">Motivation</div>
+                                            <div className="text-zinc-300 mt-0.5">
+                                                {p.buying_motivation}
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 text-xs text-zinc-400">
+                                            <div className="cm-label">Tech usage</div>
+                                            <div className="text-zinc-300 mt-0.5">
+                                                {p.technology_usage}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </TabsContent>
+
+                    {/* SWOT */}
+                    <TabsContent value="swot" className="mt-6 cm-stagger">
+                        {!insight.swot?.strengths ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to generate SWOT.
+                            </div>
+                        ) : (
+                            <div className="grid md:grid-cols-2 gap-4">
+                                {[
+                                    {
+                                        k: "strengths",
+                                        l: "Strengths",
+                                        c: "text-emerald-300",
+                                        bg: "from-emerald-500/10",
+                                        icon: Shield,
+                                    },
+                                    {
+                                        k: "weaknesses",
+                                        l: "Weaknesses",
+                                        c: "text-rose-300",
+                                        bg: "from-rose-500/10",
+                                        icon: AlertTriangle,
+                                    },
+                                    {
+                                        k: "opportunities",
+                                        l: "Opportunities",
+                                        c: "text-blue-300",
+                                        bg: "from-blue-500/10",
+                                        icon: TrendingUp,
+                                    },
+                                    {
+                                        k: "threats",
+                                        l: "Threats",
+                                        c: "text-amber-300",
+                                        bg: "from-amber-500/10",
+                                        icon: Target,
+                                    },
+                                ].map(({ k, l, c, bg, icon: Icon }) => (
+                                    <div
+                                        key={k}
+                                        className={`cm-card rounded-3xl p-6 bg-gradient-to-br ${bg} via-transparent to-transparent`}
+                                        data-testid={`swot-${k}`}
+                                    >
+                                        <div className="flex items-center gap-2.5 mb-3">
+                                            <div
+                                                className={`w-7 h-7 rounded-md bg-white/5 border border-white/10 flex items-center justify-center`}
+                                            >
+                                                <Icon className={`w-3.5 h-3.5 ${c}`} />
+                                            </div>
+                                            <h3
+                                                className={`font-display font-bold text-lg tracking-tight ${c}`}
+                                            >
+                                                {l}
+                                            </h3>
+                                        </div>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.swot[k] || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className={c}>▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </TabsContent>
+
+                    {/* BMC */}
+                    <TabsContent value="bmc" className="mt-6 cm-fade-up">
+                        {!insight.bmc?.value_proposition ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to generate the Business Model Canvas.
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="bmc-canvas">
+                                {[
+                                    { k: "key_partners", l: "Key Partners", span: "md:row-span-2" },
+                                    { k: "key_activities", l: "Key Activities", span: "" },
+                                    {
+                                        k: "value_proposition",
+                                        l: "Value Proposition",
+                                        span: "md:row-span-2 lg:col-span-1",
+                                        hl: true,
+                                    },
+                                    { k: "customer_relationships", l: "Customer Relationships", span: "" },
+                                    { k: "customer_segments", l: "Customer Segments", span: "md:row-span-2" },
+                                    { k: "key_resources", l: "Key Resources", span: "" },
+                                    { k: "channels", l: "Channels", span: "" },
+                                ].map(({ k, l, span, hl }) => (
+                                    <div
+                                        key={k}
+                                        className={`cm-card rounded-2xl p-4 ${span} ${
+                                            hl ? "ring-1 ring-amber-500/30 bg-amber-500/5" : ""
+                                        }`}
+                                        data-testid={`bmc-${k}`}
+                                    >
+                                        <div className="cm-label">{l}</div>
+                                        <ul className="mt-2 space-y-1 text-sm text-zinc-300">
+                                            {(insight.bmc[k] || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-amber-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ))}
+                                <div
+                                    className="cm-card rounded-2xl p-4 md:col-span-2 lg:col-span-3"
+                                    data-testid="bmc-cost"
+                                >
+                                    <div className="cm-label">Cost Structure</div>
+                                    <ul className="mt-2 grid sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-zinc-300">
+                                        {(insight.bmc.cost_structure || []).map((x, i) => (
+                                            <li key={i} className="flex gap-2">
+                                                <span className="text-rose-400">▪</span>
+                                                {x}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div
+                                    className="cm-card rounded-2xl p-4 md:col-span-1 lg:col-span-2"
+                                    data-testid="bmc-revenue"
+                                >
+                                    <div className="cm-label">Revenue Streams</div>
+                                    <ul className="mt-2 space-y-1 text-sm text-zinc-300">
+                                        {(insight.bmc.revenue_streams || []).map((x, i) => (
+                                            <li key={i} className="flex gap-2">
+                                                <span className="text-emerald-400">▪</span>
+                                                {x}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                        )}
+                    </TabsContent>
+
+                    {/* INVESTOR */}
+                    <TabsContent value="investor" className="mt-6 cm-stagger">
+                        {!insight.investor?.investor_readiness_score ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to generate the investor dashboard.
+                            </div>
+                        ) : (
+                            <>
+                                <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                                    {[
+                                        { l: "Readiness", v: insight.investor.investor_readiness_score, hl: true },
+                                        { l: "Funding", v: insight.investor.funding_potential_score },
+                                        { l: "Opportunity", v: insight.investor.market_opportunity_score },
+                                        { l: "Growth", v: insight.investor.growth_potential_score },
+                                        { l: "Risk", v: insight.investor.risk_score, inverse: true },
+                                    ].map((s) => (
+                                        <div
+                                            key={s.l}
+                                            className={`cm-card rounded-2xl p-5 ${
+                                                s.hl ? "ring-1 ring-amber-500/30" : ""
+                                            }`}
+                                            data-testid={`investor-${s.l.toLowerCase()}`}
+                                        >
+                                            <div className="cm-label">{s.l}</div>
+                                            <div
+                                                className={`mt-2 font-display font-black text-4xl tracking-tighter ${
+                                                    s.inverse ? "text-rose-300" : "text-amber-300"
+                                                }`}
+                                            >
+                                                {s.v}
+                                                <span className="text-xs font-mono text-zinc-500 ml-1">
+                                                    /100
+                                                </span>
+                                            </div>
+                                            <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                                <div
+                                                    className={`h-full bg-gradient-to-r ${
+                                                        s.inverse
+                                                            ? "from-rose-500 to-rose-300"
+                                                            : "from-amber-500 to-amber-300"
+                                                    }`}
+                                                    style={{ width: `${s.v}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-4 grid md:grid-cols-3 gap-4">
+                                    <div className="cm-card rounded-2xl p-6" data-testid="investor-why">
+                                        <SectionTitle icon={Sparkles}>Why invest</SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.investor.why_invest || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-emerald-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div className="cm-card rounded-2xl p-6" data-testid="investor-reject">
+                                        <SectionTitle icon={AlertTriangle}>
+                                            Why reject
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.investor.why_reject || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-rose-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div className="cm-card rounded-2xl p-6" data-testid="investor-improve">
+                                        <SectionTitle icon={Lightbulb}>
+                                            How to improve
+                                        </SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.investor.how_to_improve || []).map((x, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-amber-400">▪</span>
+                                                    {x}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </TabsContent>
+
+                    {/* PREDICTOR */}
+                    <TabsContent value="predictor" className="mt-6 cm-stagger">
+                        {!insight.success_prediction?.one_year_probability ? (
+                            <div className="cm-glass rounded-2xl p-8 text-center text-zinc-400">
+                                Re-run analysis to generate success forecasts.
+                            </div>
+                        ) : (
+                            <>
+                                <div className="grid sm:grid-cols-3 gap-3">
+                                    {[
+                                        { l: "1-year success", v: insight.success_prediction.one_year_probability },
+                                        { l: "3-year success", v: insight.success_prediction.three_year_probability },
+                                        { l: "5-year success", v: insight.success_prediction.five_year_probability },
+                                    ].map((s) => (
+                                        <div
+                                            key={s.l}
+                                            className="cm-card rounded-2xl p-6"
+                                            data-testid={`predict-${s.l.split(" ")[0]}`}
+                                        >
+                                            <div className="cm-label">{s.l}</div>
+                                            <div className="mt-2 font-display font-black text-5xl tracking-tighter text-amber-300">
+                                                {s.v}
+                                                <span className="text-xs font-mono text-zinc-500 ml-1">
+                                                    %
+                                                </span>
+                                            </div>
+                                            <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                                <div
+                                                    className="h-full bg-gradient-to-r from-amber-500 to-amber-300"
+                                                    style={{ width: `${s.v}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-4 cm-glass rounded-2xl p-6" data-testid="predict-explanation">
+                                    <SectionTitle icon={Brain}>Trajectory</SectionTitle>
+                                    <p className="text-sm text-zinc-300 leading-relaxed">
+                                        {insight.success_prediction.explanation}
+                                    </p>
+                                </div>
+                                <div className="mt-4 grid md:grid-cols-3 gap-4">
+                                    <div className="cm-card rounded-2xl p-6" data-testid="predict-drivers">
+                                        <SectionTitle icon={Rocket}>Growth drivers</SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.success_prediction.growth_drivers || []).map(
+                                                (x, i) => (
+                                                    <li key={i} className="flex gap-2">
+                                                        <span className="text-emerald-400">▪</span>
+                                                        {x}
+                                                    </li>
+                                                )
+                                            )}
+                                        </ul>
+                                    </div>
+                                    <div className="cm-card rounded-2xl p-6" data-testid="predict-risks">
+                                        <SectionTitle icon={AlertTriangle}>Critical risks</SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.success_prediction.critical_risks || []).map(
+                                                (x, i) => (
+                                                    <li key={i} className="flex gap-2">
+                                                        <span className="text-rose-400">▪</span>
+                                                        {x}
+                                                    </li>
+                                                )
+                                            )}
+                                        </ul>
+                                    </div>
+                                    <div className="cm-card rounded-2xl p-6" data-testid="predict-barriers">
+                                        <SectionTitle icon={Shield}>Market barriers</SectionTitle>
+                                        <ul className="space-y-2 text-sm text-zinc-300">
+                                            {(insight.success_prediction.market_barriers || []).map(
+                                                (x, i) => (
+                                                    <li key={i} className="flex gap-2">
+                                                        <span className="text-amber-400">▪</span>
+                                                        {x}
+                                                    </li>
+                                                )
+                                            )}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </TabsContent>
+
+                    {/* COMPETITORS (enhanced with intel) */}
+                    <TabsContent value="competitors" className="mt-6 cm-stagger">
+                        {(() => {
+                            const intel = insight.competitor_intel || {};
+                            const table =
+                                intel.table && intel.table.length
+                                    ? intel.table
+                                    : (insight.competitors || []).map((c) => ({
+                                          ...c,
+                                          pricing: "—",
+                                          market_position: "—",
+                                          customer_sentiment: "Mixed",
+                                      }));
+                            return (
+                                <>
+                                    <div
+                                        className="cm-card rounded-2xl p-0 overflow-hidden"
+                                        data-testid="competitor-table"
+                                    >
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-white/3">
+                                                    <tr className="text-left text-xs uppercase tracking-widest text-zinc-500">
+                                                        <th className="px-5 py-3">Competitor</th>
+                                                        <th className="px-5 py-3">Strengths</th>
+                                                        <th className="px-5 py-3">Weaknesses</th>
+                                                        <th className="px-5 py-3">Pricing</th>
+                                                        <th className="px-5 py-3">Position</th>
+                                                        <th className="px-5 py-3">Sentiment</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {table.map((c, i) => (
+                                                        <tr
+                                                            key={i}
+                                                            className="border-t border-white/5 align-top hover:bg-white/2 transition"
+                                                            data-testid={`competitor-row-${i}`}
+                                                        >
+                                                            <td className="px-5 py-4 font-display font-bold">
+                                                                {c.name}
+                                                            </td>
+                                                            <td className="px-5 py-4 text-zinc-300">
+                                                                {c.strengths}
+                                                            </td>
+                                                            <td className="px-5 py-4 text-zinc-300">
+                                                                {c.weaknesses}
+                                                            </td>
+                                                            <td className="px-5 py-4 text-zinc-300 whitespace-nowrap">
+                                                                {c.pricing || "—"}
+                                                            </td>
+                                                            <td className="px-5 py-4 text-zinc-300">
+                                                                {c.market_position || "—"}
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <span
+                                                                    className={`text-xs px-2 py-1 rounded-full border ${
+                                                                        c.customer_sentiment === "Positive"
+                                                                            ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/20"
+                                                                            : c.customer_sentiment ===
+                                                                              "Negative"
+                                                                            ? "text-rose-300 bg-rose-500/10 border-rose-500/20"
+                                                                            : "text-zinc-300 bg-white/5 border-white/10"
+                                                                    }`}
+                                                                >
+                                                                    {c.customer_sentiment || "Mixed"}
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 grid md:grid-cols-3 gap-4">
+                                        <div
+                                            className="cm-card rounded-2xl p-6"
+                                            data-testid="market-gaps"
+                                        >
+                                            <SectionTitle icon={Target}>
+                                                Market gaps
+                                            </SectionTitle>
+                                            <ul className="space-y-2 text-sm text-zinc-300">
+                                                {(intel.market_gaps || []).map((x, i) => (
+                                                    <li key={i} className="flex gap-2">
+                                                        <span className="text-amber-400">▪</span>
+                                                        {x}
+                                                    </li>
+                                                ))}
+                                                {(intel.market_gaps || []).length === 0 && (
+                                                    <li className="text-zinc-500 text-xs">
+                                                        Re-run analysis to populate.
+                                                    </li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                        <div
+                                            className="cm-card rounded-2xl p-6"
+                                            data-testid="competitive-advantages"
+                                        >
+                                            <SectionTitle icon={Shield}>
+                                                Your edge
+                                            </SectionTitle>
+                                            <ul className="space-y-2 text-sm text-zinc-300">
+                                                {(intel.competitive_advantages || []).map(
+                                                    (x, i) => (
+                                                        <li key={i} className="flex gap-2">
+                                                            <span className="text-emerald-400">▪</span>
+                                                            {x}
+                                                        </li>
+                                                    )
+                                                )}
+                                                {(intel.competitive_advantages || []).length ===
+                                                    0 && (
+                                                    <li className="text-zinc-500 text-xs">
+                                                        Re-run analysis to populate.
+                                                    </li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                        <div
+                                            className="cm-card rounded-2xl p-6"
+                                            data-testid="blue-ocean"
+                                        >
+                                            <SectionTitle icon={Compass}>
+                                                Blue ocean
+                                            </SectionTitle>
+                                            <ul className="space-y-2 text-sm text-zinc-300">
+                                                {(intel.blue_ocean_opportunities || []).map(
+                                                    (x, i) => (
+                                                        <li key={i} className="flex gap-2">
+                                                            <span className="text-blue-400">▪</span>
+                                                            {x}
+                                                        </li>
+                                                    )
+                                                )}
+                                                {(intel.blue_ocean_opportunities || []).length ===
+                                                    0 && (
+                                                    <li className="text-zinc-500 text-xs">
+                                                        Re-run analysis to populate.
+                                                    </li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </>
+                            );
+                        })()}
                     </TabsContent>
 
                     {/* FEEDBACK */}
