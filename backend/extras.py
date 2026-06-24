@@ -150,6 +150,7 @@ async def leaderboard(
                 "community_likes": p.get("community_likes", 0),
                 "total_responses": ins.get("total_responses", 0),
                 "demand_prediction": ins.get("demand_prediction", "Low"),
+                "is_demo": bool(p.get("is_demo", False)),
             }
         )
 

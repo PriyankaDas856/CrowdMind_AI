@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { api, API_BASE } from "../lib/api";
 import AppLayout from "../components/AppLayout";
+import DemoBadge from "../components/DemoBadge";
 
 const SORTS = [
     { v: "validation", l: "Top validated", icon: Trophy },
@@ -32,8 +33,9 @@ function Row({ item, idx, onLike, liked }) {
                 {medal}
             </div>
             <div className="flex-1 min-w-0">
-                <div className="font-display font-bold text-xl tracking-tight truncate">
+                <div className="font-display font-bold text-xl tracking-tight truncate flex items-center gap-2">
                     {item.name}
+                    {item.is_demo && <DemoBadge compact />}
                 </div>
                 <div className="text-xs text-zinc-500 font-mono">{item.category}</div>
                 <div className="mt-1 text-sm text-zinc-400 line-clamp-2">

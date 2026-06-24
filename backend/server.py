@@ -50,6 +50,7 @@ from models import (  # noqa: E402
     utc_now_iso,
 )
 from pdf_service import build_project_pdf  # noqa: E402
+from seed_demo import demo_already_seeded, seed_demo_environment  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -739,6 +740,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _startup_seed():
+    try:
+        if not await demo_already_seeded(db):
+            manifest = await seed_demo_environment(db)
+            logger.info("Demo environment seeded: %s", manifest)
+        else:
+            logger.info("Demo environment already seeded — skipping.")
+    except Exception:
+        logger.exception("Demo seed failed (non-fatal).")
+
+
+@api_router.post("/demo/seed")
+async def demo_seed(current_user: User = Depends(get_current_user)):
+    """Idempotent demo seed (admin or first-call). All data is clearly labeled demo."""
+    if current_user.role != "admin":
+        # Allow if no demo data exists yet (first-time setup convenience)
+        if await demo_already_seeded(db):
+            raise HTTPException(status_code=403, detail="Admin role required")
+    return await seed_demo_environment(db)
 
 
 @app.on_event("shutdown")

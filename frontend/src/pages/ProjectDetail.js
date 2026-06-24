@@ -38,6 +38,7 @@ import {
 } from "recharts";
 import { api, API_BASE, getToken } from "../lib/api";
 import AppLayout from "../components/AppLayout";
+import DemoBadge from "../components/DemoBadge";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 
@@ -284,7 +285,10 @@ export default function ProjectDetail() {
             <div className="cm-fade-up">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="min-w-0">
-                        <div className="cm-label">{project.category}</div>
+                        <div className="cm-label flex items-center gap-2">
+                            {project.category}
+                            {project.is_demo && <DemoBadge compact />}
+                        </div>
                         <h1
                             className="mt-1 font-display font-black text-4xl sm:text-5xl tracking-tighter"
                             data-testid="project-title"

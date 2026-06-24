@@ -1,55 +1,78 @@
 # CrowdMind AI — PRD
 
-## Original Problem Statement
-Build a production-ready SaaS web application called CrowdMind AI that helps entrepreneurs validate product ideas by collecting public feedback, analyzing it with Generative AI, identifying trends, predicting demand, and generating business recommendations.
+## Original Problem Statement (latest)
+Build a production-grade AI-powered startup validation & business intelligence platform with 12 modules (PMF, personas, competitors, investor readiness, SWOT, BMC, success forecast, pitch-deck, founder twin, idea battle, leaderboard, advanced dashboard), premium SaaS UI, async modular analysis pipeline, and a fully-seeded demo environment for portfolio showcase.
 
-## Tech Stack (chosen by user)
-- Frontend: React 19 + Tailwind + Shadcn UI + react-router-dom v7 + recharts + sonner + framer-motion + lucide-react
-- Backend: FastAPI (Python) + Motor (MongoDB async) + Pydantic v2
-- Database: MongoDB (collections: `users`, `user_sessions`, `projects`, `feedback`, `ai_insights`)
+## Tech Stack
+- Frontend: React + Tailwind + Shadcn UI + react-router-dom + recharts + sonner + lucide-react. Typography: Inter Variable.
+- Backend: FastAPI (Python) + Motor (MongoDB async) + Pydantic v2 + slowapi (rate limit) + reportlab (PDF)
+- DB: MongoDB (`users`, `user_sessions`, `projects`, `feedback`, `ai_insights`, `analysis_jobs`, `audit_logs`, `founder_profiles`, `founder_insights`)
 - AI: Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`) via `emergentintegrations` + Emergent Universal LLM Key
-- Auth: BOTH (a) JWT email/password and (b) Emergent-managed Google OAuth
+- Auth: JWT email/password + Emergent Google OAuth
 
 ## Personas
-- **Founder / Operator** — creates projects, shares public link, reviews AI report.
-- **Reviewer** — signed-in public user who submits structured feedback (rating + text + suggestion + purchase intent).
+- **Founder / Operator** — creates projects, runs AI analysis, downloads PDF, publishes to leaderboard, battles ideas, profiles themselves via Founder Twin.
+- **Reviewer** — signed-in public user submitting structured feedback.
+- **Recruiter / Investor / Hackathon judge** — explores the seeded demo environment to evaluate platform capability.
 
-## What's Implemented (2026-02 — MVP)
-- ✅ JWT auth: register / login / me / logout (`/app/backend/auth.py`)
-- ✅ Emergent Google OAuth flow with httpOnly cookie session (`/app/backend/auth.py`, `/app/frontend/src/pages/AuthCallback.js`)
-- ✅ Project CRUD scoped per owner with public shareable link (`public_link_id`)
-- ✅ Feedback submission (signed-in only, deduped per user per project)
-- ✅ AI analysis pipeline via Claude Sonnet 4.5 returning: validation_score, demand_prediction, investor_readiness_score, sentiment_breakdown, purchase_intent_breakdown, per_feedback_sentiment, trends, pain_points, competitors, business_models, revenue_models, customer_segments, and a full report (executive_summary, market_risks, opportunities, improvements, gtm_strategy, pricing_strategy, pitch_deck)
-- ✅ Dashboard stats endpoint (`/api/dashboard/stats`)
-- ✅ Landing page with luxury dark + glassmorphism + amber accent
-- ✅ Login / Register pages (JWT + Google) with split brand panel
-- ✅ Dashboard listing projects + stat cards
-- ✅ Create project form
-- ✅ Project detail with 5 tabs: Overview / AI Report / Trends / Competitors / Feedback (with recharts visualizations)
-- ✅ Public feedback submission page (signup gated)
-- ✅ Cabinet Grotesk + Manrope fonts loaded from Fontshare / Google Fonts
-- ✅ All interactive elements carry unique `data-testid`
-- ✅ 23/23 backend pytest tests passing (`/app/backend/tests/backend_test.py`)
+## What's Implemented (2026-02 → ongoing)
 
-## Backlog (next iterations)
+### MVP (iter 1)
+- JWT register/login/me/logout + Emergent Google OAuth + dual session (Bearer + cookie)
+- Project CRUD scoped per owner, public shareable link
+- Feedback submission (auth-gated, dedupe per user/project)
+- Initial monolithic Claude analysis pipeline + 23/23 backend tests
+
+### Module expansion (iter 2 — M1–M12)
+- AI Product-Market Fit Engine (5 sub-scores + qualitative)
+- Customer Personas (3–5)
+- Competitor Intelligence (table + market gaps + advantages + blue ocean)
+- Investor Readiness Analyzer (5 sub-scores + reasoning)
+- SWOT matrix
+- Business Model Canvas (9 cells)
+- Startup Success Predictor (1y/3y/5y)
+- Pitch Deck Generator (10 slides) + PDF export via reportlab
+- Founder Twin AI (profile + AI analysis)
+- Idea Battle Mode (compare 2 projects)
+- Public Leaderboard (publish toggle, 5 sort modes, community likes)
+- Advanced Dashboard with shortcuts
+- Rate limiting + audit logging + admin RBAC endpoints
+
+### Architecture fix + demo env (iter 3 — CURRENT)
+- **Async modular analysis pipeline** — replaces the monolithic 60s-blocking call:
+  - `POST /api/projects/{id}/analyze` returns **HTTP 202** + `{success, job_id, status:"queued", message}`
+  - 8 modules run concurrently via `asyncio.gather` (PMF, Personas, Competitor, Investor, SWOT, BMC, Success Forecast, Market Validation)
+  - Per-module progress tracking (`current_module`, `completed_modules`, `failed_modules`, `progress 0-100`)
+  - Fault tolerance: a single failed module marks the job `partial`, not `failed`
+  - Incremental persistence: ai_insights doc is upserted as each module completes
+  - New endpoints: `GET /api/analyze/status/{job_id}`, `GET /api/analyze/result/{job_id}`
+  - Idempotent: re-POST while a job is queued/processing returns the same job_id
+  - Owner-only enforcement (403 for others)
+- **Schema fixes:**
+  - `FounderProfile.budget` is now `float` (numeric USD). String `"25k"` → 422.
+  - `GET /api/founder/profile` returns the FLAT FounderProfile (or null).
+  - `GET /api/founder/insight` (new) returns the FLAT FounderInsight (or null).
+  - Battle returns `criteria` as an ARRAY: `[{name, a, b, note, winner, winner_name}, ...]`.
+- **Frontend Analysis Progress Modal** — 3-second polling, animated progress bar, per-module status pills (queued / in-progress / done / failed), naive ETA, error display.
+- **Premium UI design system** — Inter Variable typography, refined dark palette (near-black + amber accent), glassmorphism cards, skeleton shimmer, fade-up + stagger animations, web-kit autofill kept dark.
+- **Demo environment** — 4 fully-analyzed sample projects (`MedPass`, `FitGenie AI`, `FleetBrain AI`, `SkillSwap`) auto-seeded on startup with 30 synthetic feedback each, all clearly tagged `is_demo:true` + `_demo_label:"Sample AI Analysis"` + "Demo" pill in UI. Demo user: `demo@crowdmind.io` / `DemoUser123!`. Seed endpoint `POST /api/demo/seed` (admin or first-call). Full doc: `/app/DEMO_README.md`.
+
+## Backlog
 ### P1
-- Admin dashboard (manage all users/projects)
-- Email notifications on new feedback / analysis ready (Resend / SendGrid)
-- Export AI report as PDF / shareable public URL
-- Project edit (currently create + delete only)
-- Better feedback dedupe (allow re-submit by reviewer)
+- Premium Landing page redesign (Problem Statement, How It Works, FAQ, Testimonials, etc.) — partially in-progress in this iteration (Inter font + tokens shipped; section refresh still to come)
+- KPI sparklines on Dashboard + Startup Health Score composite
+- Admin panel UI (audit-log viewer, user/project tables) — backend RBAC ready
+- Empty-state illustrations (no projects / no feedback / no reports)
 
 ### P2
-- RAG-style competitor enrichment (web search grounded)
-- Trend graph over time (currently a snapshot)
+- PPTX export (PDF shipped)
+- Live SSE updates for analysis progress (currently 3s polling)
+- Per-module cache to skip unchanged inputs
 - Multi-language UI
 - Stripe billing for paid tiers
-- Slack/Discord integration to ping when score crosses threshold
 
 ## Test Credentials
-See `/app/memory/test_credentials.md`.
+See `/app/memory/test_credentials.md`. Demo user: `demo@crowdmind.io` / `DemoUser123!`.
 
 ## Key Env Vars
-- `MONGO_URL`, `DB_NAME`, `CORS_ORIGINS`
-- `EMERGENT_LLM_KEY` — universal LLM key
-- `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRE_DAYS`
+`MONGO_URL`, `DB_NAME`, `CORS_ORIGINS`, `EMERGENT_LLM_KEY`, `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRE_DAYS`.
