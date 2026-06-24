@@ -1,56 +1,93 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import {
+    BrowserRouter,
+    Routes,
+    Route,
+    useLocation,
+} from "react-router-dom";
+import { AuthProvider } from "./lib/auth-context";
+import Landing from "./pages/Landing";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import AuthCallback from "./pages/AuthCallback";
+import Dashboard from "./pages/Dashboard";
+import CreateProject from "./pages/CreateProject";
+import ProjectDetail from "./pages/ProjectDetail";
+import FeedbackSubmit from "./pages/FeedbackSubmit";
+import ProtectedRoute from "./components/ProtectedRoute";
+import { Toaster } from "sonner";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
+function AppRouter() {
+    const location = useLocation();
+    // Detect Emergent OAuth fragment synchronously to avoid race conditions
+    if (location.hash?.includes("session_id=")) {
+        return <AuthCallback />;
     }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+    return (
+        <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
+            <Route path="/feedback/:publicLinkId" element={<FeedbackSubmit />} />
+            <Route
+                path="/dashboard"
+                element={
+                    <ProtectedRoute>
+                        <Dashboard />
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/projects"
+                element={
+                    <ProtectedRoute>
+                        <Dashboard />
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/projects/new"
+                element={
+                    <ProtectedRoute>
+                        <CreateProject />
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/projects/:projectId"
+                element={
+                    <ProtectedRoute>
+                        <ProjectDetail />
+                    </ProtectedRoute>
+                }
+            />
+        </Routes>
+    );
+}
 
 function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
-  );
+    return (
+        <div className="App">
+            <BrowserRouter>
+                <AuthProvider>
+                    <Toaster
+                        position="top-right"
+                        theme="dark"
+                        toastOptions={{
+                            style: {
+                                background: "rgba(11,15,25,0.9)",
+                                color: "#F9FAFB",
+                                border: "1px solid rgba(255,255,255,0.08)",
+                                backdropFilter: "blur(20px)",
+                            },
+                        }}
+                    />
+                    <AppRouter />
+                </AuthProvider>
+            </BrowserRouter>
+        </div>
+    );
 }
 
 export default App;

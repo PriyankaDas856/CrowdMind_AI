@@ -1,0 +1,54 @@
+{
+  "summary": "Ran 23 pytest backend tests against external REACT_APP_BACKEND_URL. 20 pass, 3 fail — all 3 caused by a single Pydantic schema bug in AIInsight.customer_segments that crashes the /analyze endpoint with HTTP 500.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/projects/{project_id}/analyze",
+        "issue": "Returns 500 Internal Server Error. Pydantic ValidationError when constructing AIInsight: customer_segments.*.percent receives int (e.g. 40) but model declares List[Dict[str, str]]. Claude correctly follows the prompt schema (percent is int 0-100), but the storage model rejects it. Fix: in /app/backend/models.py change AIInsight.customer_segments type from List[Dict[str, str]] to List[Dict[str, Any]] (Any already imported). Also wrap the post-LLM construction in try/except to surface a 502 instead of 500.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/register",
+        "issue": "Pydantic EmailStr rejects .test TLD (\"reserved name\"). The seed credentials in /app/memory/test_credentials.md use @crowdmind.test which cannot be registered. Either update the docs to use a real-looking TLD (e.g. @crowdmind.io) or relax EmailStr validation."
+      },
+      {
+        "endpoint": "POST /api/auth/logout",
+        "issue": "Endpoint always returns ok=true even with a valid JWT (no session cookie to clear). Acceptable but is effectively a no-op for JWT users; consider documenting that JWT clients must discard tokens client-side."
+      },
+      {
+        "endpoint": "GET /api/projects/{project_id}/feedback",
+        "issue": "Non-owner gets 404 (project filtered by owner_id). Behavior is fine but a 403 would be more semantically correct."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX (critical): Change AIInsight.customer_segments to List[Dict[str, Any]] in /app/backend/models.py so the AI-returned percent:int is accepted. This unblocks /analyze, project-detail insight, and dashboard analyzed_projects count.",
+    "Optionally wrap the insight construction + DB persist in try/except inside run_analysis to return 502 instead of 500 when the model output cannot be coerced.",
+    "Update /app/memory/test_credentials.md (or backend EmailStr config) so seed accounts using @crowdmind.test can actually be registered."
+  ],
+  "critical_code_review_comments": [
+    "AIInsight.customer_segments typed as List[Dict[str, str]] is inconsistent with the LLM prompt that asks for percent as int — this is the root cause of the /analyze 500.",
+    "run_analysis only catches exceptions inside analyze_project; the subsequent AIInsight(**result) call can also fail and currently leaks as 500 — wrap or validate the parsed dict before persisting.",
+    "JWT_SECRET committed to /app/backend/.env — fine for dev but rotate before any deploy.",
+    "server.py imports Counter/datetime/timezone unused (kept alive via `_ = (...)` hack) — clean up.",
+    "Dashboard latest-insight selection compares ISO strings — works because of ISO ordering, but the `await db.ai_insights.find(...).to_list(...)` could be replaced by a sort+limit per project for cleaner code.",
+    "Feedback listing returns 404 for non-owner (looks intentional) but should ideally be 403 for non-owner of an existing project."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (new)"
+  ],
+  "success_rate": {"backend": "87% (20/23)", "frontend": "n/a"},
+  "test_credentials": "Documented founder@crowdmind.test / Founder123! cannot be used because EmailStr rejects .test TLD. Tests dynamically register founder_<uuid>@crowdmind.io and reviewer_<uuid>@crowdmind.io with the matching passwords.",
+  "seed_data_creation": "Each pytest run registers two fresh users with a UUID suffix and one TEST project; the final test deletes the project (which cascades feedback + insights). Users remain in DB.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app && python -m pytest backend/tests/backend_test.py -v. The /analyze test takes ~40s due to a real Claude Sonnet 4.5 call. If the customer_segments model fix is applied, all 23 tests should pass. The frontend has not been tested in this iteration (backend-only request).",
+  "rca of the issue": "POST /api/projects/{id}/analyze: Claude returns customer_segments=[{name,description,percent:int}]. Pydantic AIInsight model declares customer_segments: List[Dict[str, str]] in /app/backend/models.py line ~115 → ValidationError: 'Input should be a valid string'. The error is not caught (it occurs after the try/except around analyze_project), so FastAPI returns 500. Fix one line: List[Dict[str, str]] → List[Dict[str, Any]]. Reproduction: register a user, create a project, submit ≥1 feedback, POST /analyze with Bearer token — observe 500 and the pydantic_core.ValidationError in /var/log/supervisor/backend.err.log."
+}
